@@ -18,9 +18,10 @@ import (
 
 // Data Structures
 type OAuthTokenFile struct {
-	Token      TokenDetails `json:"token"`
-	AuthMethod string       `json:"auth_method"`
-	IDToken    string       `json:"id_token"`
+	Token        TokenDetails `json:"token"`
+	AuthMethod   string       `json:"auth_method"`
+	IDToken      string       `json:"id_token,omitempty"`
+	IDTokenEmail string       `json:"id_token_email,omitempty"`
 }
 
 type TokenDetails struct {
@@ -189,6 +190,12 @@ func readTokenInfo(filePath string) (*ProfileInfo, error) {
 			}
 			sub = jwt.Sub
 			expSec = int64(jwt.Exp)
+		}
+	}
+	if (email == "Unknown email" || email == "") && tokenFile.IDTokenEmail != "" {
+		email = tokenFile.IDTokenEmail
+		if sub == "" {
+			sub = tokenFile.IDTokenEmail
 		}
 	}
 
@@ -432,6 +439,35 @@ func getKeychainPassword() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func parseKeychainToken(rawKeychain string) (*OAuthTokenFile, string, error) {
+	if !strings.HasPrefix(rawKeychain, "go-keyring-base64:") {
+		return nil, "", fmt.Errorf("unknown keyring format")
+	}
+	encoded := strings.TrimPrefix(rawKeychain, "go-keyring-base64:")
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, "", err
+	}
+
+	type KeyringPayload struct {
+		Token        TokenDetails `json:"token"`
+		AuthMethod   string       `json:"auth_method"`
+		IDTokenEmail string       `json:"id_token_email"`
+	}
+
+	var p KeyringPayload
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, "", err
+	}
+
+	tokFile := OAuthTokenFile{
+		Token:        p.Token,
+		AuthMethod:   p.AuthMethod,
+		IDTokenEmail: p.IDTokenEmail,
+	}
+	return &tokFile, p.IDTokenEmail, nil
 }
 
 func setKeychainPassword(pw string) error {

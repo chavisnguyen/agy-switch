@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -378,16 +379,41 @@ func cmdLoginNew(name string) {
 		fmt.Println(colorize("⚠️  agy session ended or was interrupted.", ColorYellow))
 	}
 
+	newKeychain := getKeychainPassword()
+	keychainChanged := (newKeychain != "" && newKeychain != keychainBackup)
+	fileExists := false
 	if _, err := os.Stat(tokenPath); err == nil {
-		newInfo, _ := readTokenInfo(tokenPath)
-		targetPath := filepath.Join(profilesDir, name+".json")
-		_ = copyFile(tokenPath, targetPath, 0600)
-		_ = os.WriteFile(currentFile, []byte(name), 0600)
+		fileExists = true
+	}
 
+	if keychainChanged || fileExists {
+		targetPath := filepath.Join(profilesDir, name+".json")
 		email := "N/A"
-		if newInfo != nil {
-			email = newInfo.Email
+
+		if keychainChanged {
+			tokFile, emailFromKeyring, err := parseKeychainToken(newKeychain)
+			if err == nil && tokFile != nil {
+				data, _ := json.MarshalIndent(tokFile, "", "  ")
+				_ = os.WriteFile(targetPath, data, 0600)
+				_ = os.WriteFile(tokenPath, data, 0600)
+				email = emailFromKeyring
+			} else if fileExists {
+				_ = copyFile(tokenPath, targetPath, 0600)
+			}
+		} else if fileExists {
+			_ = copyFile(tokenPath, targetPath, 0600)
+			info, _ := readTokenInfo(tokenPath)
+			if info != nil {
+				email = info.Email
+			}
+			var tokFile OAuthTokenFile
+			data, _ := os.ReadFile(tokenPath)
+			if err := json.Unmarshal(data, &tokFile); err == nil {
+				_ = syncKeychainFromTokenFile(tokFile, email)
+			}
 		}
+
+		_ = os.WriteFile(currentFile, []byte(name), 0600)
 		loginCompleted = true
 		if hadActiveFile {
 			_ = os.Remove(tempActiveBak)
