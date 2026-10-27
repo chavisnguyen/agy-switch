@@ -2,21 +2,17 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // ANSI Colors
 const (
@@ -47,8 +43,6 @@ func colorize(text, color string) string {
 	return color + text + ColorReset
 }
 
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-
 func visualLen(s string) int {
 	clean := ansiRegex.ReplaceAllString(s, "")
 	return len([]rune(clean))
@@ -62,290 +56,16 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-vl)
 }
 
-// OAuth Token Data Structure
-type OAuthTokenFile struct {
-	Token      TokenDetails `json:"token"`
-	AuthMethod string       `json:"auth_method"`
-	IDToken    string       `json:"id_token"`
-}
-
-type TokenDetails struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	RefreshToken string `json:"refresh_token"`
-	Expiry       string `json:"expiry"`
-}
-
-type JWTPayload struct {
-	Email string  `json:"email"`
-	Name  string  `json:"name"`
-	Sub   string  `json:"sub"`
-	Exp   float64 `json:"exp"`
-}
-
-type ProfileInfo struct {
-	ProfileName  string
-	Email        string
-	Name         string
-	Sub          string
-	RefreshToken string
-	StatusToken  string
-	IsValid      bool
-	IsActive     bool
-	FilePath     string
-	Hash         string
-}
-
-// Paths
-func getPaths() (cliHome, tokenPath, profilesDir, currentFile, backupPath string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.Getenv("HOME")
-	}
-	cliHome = filepath.Join(home, ".gemini", "antigravity-cli")
-	tokenPath = filepath.Join(cliHome, "antigravity-oauth-token")
-	profilesDir = filepath.Join(cliHome, "profiles")
-	currentFile = filepath.Join(profilesDir, ".current")
-	backupPath = filepath.Join(cliHome, "antigravity-oauth-token.bak")
-	return
-}
-
-func ensureDirs() error {
-	_, _, profilesDir, _, _ := getPaths()
-	if err := os.MkdirAll(profilesDir, 0700); err != nil {
-		return err
-	}
-	return os.Chmod(profilesDir, 0700)
-}
-
-func decodeJWTPayload(idToken string) (*JWTPayload, error) {
-	parts := strings.Split(idToken, ".")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid JWT format")
-	}
-
-	segment := parts[1]
-	if l := len(segment) % 4; l > 0 {
-		segment += strings.Repeat("=", 4-l)
-	}
-
-	data, err := base64.URLEncoding.DecodeString(segment)
-	if err != nil {
-		data, err = base64.RawURLEncoding.DecodeString(parts[1])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var payload JWTPayload
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
-	}
-	return &payload, nil
-}
-
-func getFileSHA256(filePath string) (string, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
-}
-
-func atomicWriteFile(dst string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(dst)
-	tmp, err := os.CreateTemp(dir, "token_tmp_*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, dst)
-}
-
-func readTokenInfo(filePath string) (*ProfileInfo, error) {
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var tokenFile OAuthTokenFile
-	if err := json.Unmarshal(raw, &tokenFile); err != nil {
-		return nil, err
-	}
-
-	email := "Unknown email"
-	name := "N/A"
-	sub := ""
-	var expSec int64 = 0
-
-	if tokenFile.IDToken != "" {
-		if jwt, err := decodeJWTPayload(tokenFile.IDToken); err == nil {
-			if jwt.Email != "" {
-				email = jwt.Email
-			}
-			if jwt.Name != "" {
-				name = jwt.Name
-			}
-			sub = jwt.Sub
-			expSec = int64(jwt.Exp)
-		}
-	}
-
-	statusToken := "Unknown"
-	isValid := false
-
-	if tokenFile.Token.RefreshToken != "" {
-		statusToken = "Valid (Auto-refresh)"
-		isValid = true
-	} else if expSec > 0 {
-		expTime := time.Unix(expSec, 0)
-		now := time.Now()
-		if expTime.After(now) {
-			diff := expTime.Sub(now)
-			statusToken = fmt.Sprintf("%dh left", int(diff.Hours()))
-			isValid = true
-		} else {
-			statusToken = "Expired"
-			isValid = false
-		}
-	}
-
-	hash, _ := getFileSHA256(filePath)
-
-	return &ProfileInfo{
-		Email:        email,
-		Name:         name,
-		Sub:          sub,
-		RefreshToken: tokenFile.Token.RefreshToken,
-		StatusToken:  statusToken,
-		IsValid:      isValid,
-		FilePath:     filePath,
-		Hash:         hash,
-	}, nil
-}
-
-func sanitizeName(name string) string {
-	reg := regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
-	return strings.TrimSpace(reg.ReplaceAllString(name, ""))
-}
-
-func getAllProfiles() ([]ProfileInfo, error) {
-	if err := ensureDirs(); err != nil {
-		return nil, err
-	}
-
-	_, tokenPath, profilesDir, currentFile, _ := getPaths()
-	activeInfo, _ := readTokenInfo(tokenPath)
-
-	currentSaved := ""
-	if b, err := os.ReadFile(currentFile); err == nil {
-		currentSaved = strings.TrimSpace(string(b))
-	}
-
-	entries, err := os.ReadDir(profilesDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var profiles []ProfileInfo
-	matchedOne := false
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-
-		pName := strings.TrimSuffix(entry.Name(), ".json")
-		fullPath := filepath.Join(profilesDir, entry.Name())
-		info, err := readTokenInfo(fullPath)
-		if err != nil {
-			continue
-		}
-
-		info.ProfileName = pName
-		isActive := false
-
-		if activeInfo != nil {
-			if currentSaved != "" && pName == currentSaved {
-				isActive = true
-				matchedOne = true
-			} else if currentSaved == "" && !matchedOne {
-				if info.Hash != "" && info.Hash == activeInfo.Hash {
-					isActive = true
-					matchedOne = true
-				} else if info.RefreshToken != "" && info.RefreshToken == activeInfo.RefreshToken {
-					isActive = true
-					matchedOne = true
-				} else if info.Sub != "" && info.Sub == activeInfo.Sub {
-					isActive = true
-					matchedOne = true
-				}
-			}
-		}
-
-		info.IsActive = isActive
-		profiles = append(profiles, *info)
-	}
-
-	sort.Slice(profiles, func(i, j int) bool {
-		return profiles[i].ProfileName < profiles[j].ProfileName
-	})
-
-	return profiles, nil
-}
-
 // ==================== CLI COMMANDS ====================
 
 func cmdList() {
-	_, tokenPath, _, _, _ := getPaths()
+	_, tokenPath, _, _, _, _, _ := getPaths()
 	profiles, _ := getAllProfiles()
 	activeInfo, _ := readTokenInfo(tokenPath)
 
 	fmt.Println()
 	fmt.Println(colorize("📋 AGY ACCOUNTS & PROFILES", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 74), ColorDim))
+	fmt.Println(colorize(strings.Repeat("═", 78), ColorDim))
 
 	if len(profiles) == 0 {
 		fmt.Println(colorize("No profiles saved yet.", ColorYellow))
@@ -353,9 +73,9 @@ func cmdList() {
 		return
 	}
 
-	header := fmt.Sprintf("%-4s %-16s %-26s %-16s %s", "ID", "PROFILE", "EMAIL", "STATUS", "TOKEN")
+	header := fmt.Sprintf("%-4s %-16s %-26s %-18s %s", "ID", "PROFILE", "EMAIL", "STATUS", "TOKEN")
 	fmt.Println(header)
-	fmt.Println(colorize(strings.Repeat("─", 74), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 78), ColorDim))
 
 	anyActive := false
 	for idx, p := range profiles {
@@ -363,6 +83,8 @@ func cmdList() {
 		if p.IsActive {
 			status = colorize("● ACTIVE", ColorBold+ColorGreen)
 			anyActive = true
+		} else if p.IsCoolingDown {
+			status = colorize("🟡 Cooldown ("+p.CooldownRemain+")", ColorYellow)
 		}
 
 		ver := colorize("🟢 "+p.StatusToken, ColorGreen)
@@ -380,13 +102,13 @@ func cmdList() {
 			padRight(sttStr, 4),
 			padRight(pName, 16),
 			padRight(p.Email, 26),
-			padRight(status, 16),
+			padRight(status, 18),
 			ver,
 		)
 		fmt.Println(line)
 	}
 
-	fmt.Println(colorize(strings.Repeat("─", 74), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 78), ColorDim))
 
 	if !anyActive && activeInfo != nil {
 		fmt.Println(colorize(fmt.Sprintf("⚠️  Active account (%s) is not saved to any profile.", activeInfo.Email), ColorYellow))
@@ -401,7 +123,7 @@ func cmdSave(name string) {
 		return
 	}
 
-	_, tokenPath, profilesDir, currentFile, _ := getPaths()
+	_, tokenPath, profilesDir, currentFile, _, _, _ := getPaths()
 	activeInfo, err := readTokenInfo(tokenPath)
 	if err != nil {
 		fmt.Println(colorize("❌ Error: Active token file not found at ~/.gemini/antigravity-cli/antigravity-oauth-token", ColorRed))
@@ -451,45 +173,33 @@ func cmdSave(name string) {
 }
 
 func cmdSwitch(name string) {
-	if err := ensureDirs(); err != nil {
-		fmt.Printf("Error creating directory: %v\n", err)
-		return
+	name = sanitizeName(name)
+	_, tokenPath, _, _, _, _, _ := getPaths()
+
+	profiles, _ := getAllProfiles()
+	var targetProfile *ProfileInfo
+	for _, p := range profiles {
+		if strings.EqualFold(p.ProfileName, name) {
+			targetProfile = &p
+			break
+		}
 	}
 
-	name = sanitizeName(name)
-	_, tokenPath, profilesDir, currentFile, backupPath := getPaths()
-	targetPath := filepath.Join(profilesDir, name+".json")
-
-	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+	if targetProfile == nil {
 		fmt.Println(colorize(fmt.Sprintf("❌ Profile not found: '%s'", name), ColorRed))
 		cmdList()
 		return
 	}
 
-	activeHash, _ := getFileSHA256(tokenPath)
-	targetHash, _ := getFileSHA256(targetPath)
-	if activeHash != "" && activeHash == targetHash {
+	if targetProfile.IsActive {
 		fmt.Println(colorize(fmt.Sprintf("ℹ️  Profile '%s' is ALREADY active. No switch needed.", name), ColorYellow))
 		return
 	}
 
-	// Backup current active token
-	if _, err := os.Stat(tokenPath); err == nil {
-		_ = copyFile(tokenPath, backupPath, 0600)
-	}
-
-	// Read and atomic write
-	data, err := os.ReadFile(targetPath)
-	if err != nil {
-		fmt.Printf(colorize("❌ Error reading profile: %v\n", ColorRed), err)
+	if err := switchProfileByName(targetProfile.ProfileName); err != nil {
+		fmt.Printf(colorize("❌ Error switching profile: %v\n", ColorRed), err)
 		return
 	}
-
-	if err := atomicWriteFile(tokenPath, data, 0600); err != nil {
-		fmt.Printf(colorize("❌ Error writing active token: %v\n", ColorRed), err)
-		return
-	}
-	_ = os.WriteFile(currentFile, []byte(name), 0600)
 
 	info, _ := readTokenInfo(tokenPath)
 	email := "N/A"
@@ -502,7 +212,7 @@ func cmdSwitch(name string) {
 	}
 
 	fmt.Println()
-	fmt.Println(colorize(fmt.Sprintf("🚀 SWITCHED TO PROFILE: %s", strings.ToUpper(name)), ColorBold+ColorGreen))
+	fmt.Println(colorize(fmt.Sprintf("🚀 SWITCHED TO PROFILE: %s", strings.ToUpper(targetProfile.ProfileName)), ColorBold+ColorGreen))
 	fmt.Println(colorize(strings.Repeat("═", 50), ColorDim))
 	fmt.Printf("   Email : %s\n", colorize(email, ColorBold+ColorCyan))
 	fmt.Printf("   Name  : %s\n", nameUser)
@@ -512,8 +222,28 @@ func cmdSwitch(name string) {
 	fmt.Println()
 }
 
+func cmdNext() {
+	nextName, err := switchNextProfile("Manual switch")
+	if err != nil {
+		fmt.Println(colorize(fmt.Sprintf("❌ Cannot switch: %v", err), ColorRed))
+		return
+	}
+
+	_, tokenPath, _, _, _, _, _ := getPaths()
+	info, _ := readTokenInfo(tokenPath)
+	email := "N/A"
+	if info != nil {
+		email = info.Email
+	}
+
+	fmt.Println()
+	fmt.Println(colorize(fmt.Sprintf("🔄 ROTATED TO NEXT PROFILE: %s", strings.ToUpper(nextName)), ColorBold+ColorGreen))
+	fmt.Printf("   Email: %s\n", colorize(email, ColorCyan))
+	fmt.Println()
+}
+
 func cmdCurrent() {
-	_, tokenPath, _, _, _ := getPaths()
+	_, tokenPath, _, _, _, _, _ := getPaths()
 	info, err := readTokenInfo(tokenPath)
 	if err != nil {
 		fmt.Println(colorize("❌ No active account found on agy CLI.", ColorRed))
@@ -605,7 +335,7 @@ func cmdLoginNew(name string) {
 		return
 	}
 
-	cliHome, tokenPath, profilesDir, _, _ := getPaths()
+	cliHome, tokenPath, profilesDir, _, _, _, _ := getPaths()
 	hadActive := false
 	tempActiveBak := filepath.Join(cliHome, fmt.Sprintf("active_before_new_%d", time.Now().Unix()))
 
@@ -658,7 +388,7 @@ func cmdLoginNew(name string) {
 
 func cmdRemove(name string) {
 	name = sanitizeName(name)
-	_, _, profilesDir, _, _ := getPaths()
+	_, _, profilesDir, _, _, _, _ := getPaths()
 	target := filepath.Join(profilesDir, name+".json")
 
 	if _, err := os.Stat(target); os.IsNotExist(err) {
@@ -671,9 +401,35 @@ func cmdRemove(name string) {
 	confirm, _ := reader.ReadString('\n')
 	if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
 		_ = os.Remove(target)
+		clearProfileCooldown(name)
 		fmt.Println(colorize(fmt.Sprintf("🗑️  Deleted profile '%s'.", name), ColorGreen))
 	} else {
 		fmt.Println("Cancelled.")
+	}
+}
+
+func cmdCooldown(args []string) {
+	if len(args) == 0 {
+		cooldowns := loadCooldowns()
+		if len(cooldowns) == 0 {
+			fmt.Println(colorize("No profiles are currently in cooldown.", ColorGreen))
+			return
+		}
+		fmt.Println(colorize("🟡 Cooldown Profiles:", ColorBold+ColorYellow))
+		for name, exp := range cooldowns {
+			rem := time.Until(time.Unix(exp, 0))
+			fmt.Printf("   - %s: %dm remaining\n", name, int(rem.Minutes()))
+		}
+		fmt.Println("\nTo clear: " + colorize("agy-switch cooldown clear", ColorCyan))
+		return
+	}
+
+	if args[0] == "clear" || args[0] == "reset" {
+		clearAllCooldowns()
+		fmt.Println(colorize("✅ Cleared all cooldowns! All profiles are now marked Ready.", ColorGreen))
+	} else {
+		clearProfileCooldown(args[0])
+		fmt.Println(colorize(fmt.Sprintf("✅ Cleared cooldown for profile '%s'.", args[0]), ColorGreen))
 	}
 }
 
@@ -716,15 +472,25 @@ func cmdInstall() {
 func printHelp() {
 	fmt.Println(`agy-switch (Golang): Fast & lightweight multi-account switcher for Google Antigravity CLI
 
-USAGE:
+CORE COMMANDS:
   agy-switch                         Interactive menu to choose and switch accounts
   agy-switch <profile_name>          Instantly switch to the specified profile
+  agy-switch next                    Rotate to the next available profile (Round-Robin)
   agy-switch list (ls)               List all saved profiles and token statuses
   agy-switch save [name] (add)       Save current active session as a profile
   agy-switch switch <name> (use)     Switch to specified profile
   agy-switch current (whoami, status)Display active account details
   agy-switch login [name]            Log in to a new Google account and save profile
   agy-switch remove <name> (rm)      Delete a profile
+  agy-switch cooldown [clear|<name>] View or reset rate-limit cooldown status
+
+AUTO-SWITCH & FAILOVER:
+  agy-switch run [args...]           Smart wrapper: runs agy with auto-switch & --continue resume
+  agy-switch watch [start|stop|status]
+                                     Log watcher daemon: monitors 429/ResourceExhausted errors,
+                                     swaps tokens automatically and sends macOS notifications
+
+UTILITY:
   agy-switch install                 Create a global symlink in /opt/homebrew/bin
   agy-switch help (-h, --help)       Show this help message`)
 }
@@ -752,6 +518,8 @@ func main() {
 			return
 		}
 		cmdSwitch(args[1])
+	case "next":
+		cmdNext()
 	case "current", "whoami", "status":
 		cmdCurrent()
 	case "login":
@@ -766,6 +534,12 @@ func main() {
 			return
 		}
 		cmdRemove(args[1])
+	case "watch":
+		cmdWatch(args[1:])
+	case "run":
+		cmdRun(args[1:])
+	case "cooldown":
+		cmdCooldown(args[1:])
 	case "install":
 		cmdInstall()
 	case "help", "--help", "-h":
