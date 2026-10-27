@@ -196,7 +196,7 @@ func readTokenInfo(filePath string) (*ProfileInfo, error) {
 	isValid := false
 
 	if tokenFile.Token.RefreshToken != "" {
-		statusToken = "Valid (Auto-refresh)"
+		statusToken = "Valid"
 		isValid = true
 	} else if expSec > 0 {
 		expTime := time.Unix(expSec, 0)

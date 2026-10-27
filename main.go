@@ -65,7 +65,7 @@ func cmdList() {
 
 	fmt.Println()
 	fmt.Println(colorize("📋 AGY ACCOUNTS & PROFILES", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 78), ColorDim))
+	fmt.Println(colorize(strings.Repeat("═", 70), ColorDim))
 
 	if len(profiles) == 0 {
 		fmt.Println(colorize("No profiles saved yet.", ColorYellow))
@@ -73,9 +73,9 @@ func cmdList() {
 		return
 	}
 
-	header := fmt.Sprintf("%-4s %-16s %-26s %-18s %s", "ID", "PROFILE", "EMAIL", "STATUS", "TOKEN")
+	header := fmt.Sprintf("%-4s %-14s %-26s %-14s %s", "ID", "PROFILE", "EMAIL", "STATUS", "TOKEN")
 	fmt.Println(header)
-	fmt.Println(colorize(strings.Repeat("─", 78), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 70), ColorDim))
 
 	anyActive := false
 	for idx, p := range profiles {
@@ -84,7 +84,7 @@ func cmdList() {
 			status = colorize("● ACTIVE", ColorBold+ColorGreen)
 			anyActive = true
 		} else if p.IsCoolingDown {
-			status = colorize("🟡 Cooldown ("+p.CooldownRemain+")", ColorYellow)
+			status = colorize("🟡 "+p.CooldownRemain, ColorYellow)
 		}
 
 		ver := colorize("🟢 "+p.StatusToken, ColorGreen)
@@ -100,15 +100,15 @@ func cmdList() {
 		sttStr := fmt.Sprintf("[%2d]", idx+1)
 		line := fmt.Sprintf("%s %s %s %s %s",
 			padRight(sttStr, 4),
-			padRight(pName, 16),
+			padRight(pName, 14),
 			padRight(p.Email, 26),
-			padRight(status, 18),
+			padRight(status, 14),
 			ver,
 		)
 		fmt.Println(line)
 	}
 
-	fmt.Println(colorize(strings.Repeat("─", 78), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 70), ColorDim))
 
 	if !anyActive && activeInfo != nil {
 		fmt.Println(colorize(fmt.Sprintf("⚠️  Active account (%s) is not saved to any profile.", activeInfo.Email), ColorYellow))
