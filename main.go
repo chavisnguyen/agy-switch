@@ -335,22 +335,39 @@ func cmdLoginNew(name string) {
 		return
 	}
 
-	cliHome, tokenPath, profilesDir, _, _, _, _ := getPaths()
-	hadActive := false
+	cliHome, tokenPath, profilesDir, currentFile, _, _, _ := getPaths()
 	tempActiveBak := filepath.Join(cliHome, fmt.Sprintf("active_before_new_%d", time.Now().Unix()))
 
+	// Backup current token file & current Keychain entry
+	hadActiveFile := false
 	if _, err := os.Stat(tokenPath); err == nil {
 		_ = copyFile(tokenPath, tempActiveBak, 0600)
-		hadActive = true
-		_ = os.Remove(tokenPath)
+		hadActiveFile = true
 	}
+	keychainBackup := getKeychainPassword()
+
+	// Defer restoration in case of interruption or cancellation
+	loginCompleted := false
+	defer func() {
+		if !loginCompleted {
+			if hadActiveFile {
+				_ = copyFile(tempActiveBak, tokenPath, 0600)
+				_ = os.Remove(tempActiveBak)
+			}
+			if keychainBackup != "" {
+				_ = setKeychainPassword(keychainBackup)
+			}
+		}
+	}()
+
+	// Temporarily clear credentials so agy starts genuine Google login
+	_ = os.Remove(tokenPath)
+	_ = deleteKeychainPassword()
 
 	fmt.Println()
-	fmt.Println(colorize("🔑 LOG IN TO A NEW ACCOUNT", ColorBold+ColorCyan))
-	fmt.Println("Launching `agy` to start Google browser login.")
-	fmt.Printf("Once browser authentication finishes, type %s inside agy to complete.\n\n", colorize("/exit", ColorYellow))
-	fmt.Print("Press [Enter] to launch agy...")
-	_, _ = reader.ReadString('\n')
+	fmt.Println(colorize(fmt.Sprintf("🔑 STARTING LOGIN FOR PROFILE: %s", strings.ToUpper(name)), ColorBold+ColorCyan))
+	fmt.Println("Launching `agy` to start Google browser authentication...")
+	fmt.Printf("Once authentication finishes in your browser, type %s inside agy to complete.\n\n", colorize("/exit", ColorYellow))
 
 	cmd := exec.Command("agy")
 	cmd.Stdin = os.Stdin
@@ -358,31 +375,29 @@ func cmdLoginNew(name string) {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		fmt.Println(colorize("⚠️  agy process finished or was interrupted.", ColorYellow))
+		fmt.Println(colorize("⚠️  agy session ended or was interrupted.", ColorYellow))
 	}
 
 	if _, err := os.Stat(tokenPath); err == nil {
 		newInfo, _ := readTokenInfo(tokenPath)
 		targetPath := filepath.Join(profilesDir, name+".json")
 		_ = copyFile(tokenPath, targetPath, 0600)
+		_ = os.WriteFile(currentFile, []byte(name), 0600)
 
 		email := "N/A"
 		if newInfo != nil {
 			email = newInfo.Email
 		}
+		loginCompleted = true
+		if hadActiveFile {
+			_ = os.Remove(tempActiveBak)
+		}
+
 		fmt.Println()
 		fmt.Println(colorize(fmt.Sprintf("🎉 Successfully logged in and saved profile '%s'!", name), ColorBold+ColorGreen))
-		fmt.Printf("   Email: %s\n", colorize(email, ColorCyan))
-		if hadActive {
-			_ = os.Remove(tempActiveBak)
-		}
+		fmt.Printf("   Email: %s\n\n", colorize(email, ColorCyan))
 	} else {
-		fmt.Println(colorize("❌ Login was not completed or failed.", ColorRed))
-		if hadActive {
-			fmt.Println("Restoring previous active account...")
-			_ = copyFile(tempActiveBak, tokenPath, 0600)
-			_ = os.Remove(tempActiveBak)
-		}
+		fmt.Println(colorize("❌ Login was not completed. Restoring previous account...", ColorRed))
 	}
 }
 

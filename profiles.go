@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -425,6 +426,54 @@ func switchNextProfile(reason string) (string, error) {
 	return selected, nil
 }
 
+func getKeychainPassword() string {
+	out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func setKeychainPassword(pw string) error {
+	if pw == "" {
+		return nil
+	}
+	cmd := exec.Command("security", "add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", pw)
+	return cmd.Run()
+}
+
+func deleteKeychainPassword() error {
+	cmd := exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity")
+	return cmd.Run()
+}
+
+func syncKeychainFromTokenFile(tokenFile OAuthTokenFile, email string) error {
+	type KeyringPayload struct {
+		Token        TokenDetails `json:"token"`
+		AuthMethod   string       `json:"auth_method"`
+		IDTokenEmail string       `json:"id_token_email"`
+	}
+
+	authMethod := tokenFile.AuthMethod
+	if authMethod == "" {
+		authMethod = "consumer"
+	}
+
+	payload := KeyringPayload{
+		Token:        tokenFile.Token,
+		AuthMethod:   authMethod,
+		IDTokenEmail: email,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	encoded := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(data)
+	return setKeychainPassword(encoded)
+}
+
 func switchProfileByName(name string) error {
 	if err := ensureDirs(); err != nil {
 		return err
@@ -453,5 +502,17 @@ func switchProfileByName(name string) error {
 		return fmt.Errorf("failed to write active token: %w", err)
 	}
 	_ = os.WriteFile(currentFile, []byte(name), 0600)
+
+	// Sync with macOS Keychain so both CLI & IDE stay in sync
+	var tokFile OAuthTokenFile
+	if err := json.Unmarshal(data, &tokFile); err == nil {
+		info, _ := readTokenInfo(targetPath)
+		email := ""
+		if info != nil {
+			email = info.Email
+		}
+		_ = syncKeychainFromTokenFile(tokFile, email)
+	}
+
 	return nil
 }
