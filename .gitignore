@@ -1,0 +1,13 @@
+# Binaries
+agy-switch
+*.exe
+*.dll
+*.so
+*.dylib
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
