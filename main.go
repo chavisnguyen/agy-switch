@@ -423,6 +423,65 @@ func cmdRemove(name string) {
 	}
 }
 
+func cmdRename(oldName, newName string) {
+	if err := ensureDirs(); err != nil {
+		fmt.Printf("Error accessing directory: %v\n", err)
+		return
+	}
+
+	oldName = sanitizeName(oldName)
+	newName = sanitizeName(newName)
+
+	if oldName == "" || newName == "" {
+		fmt.Println(colorize("❌ Usage: agy-switch rename <old_name> <new_name>", ColorRed))
+		return
+	}
+
+	if strings.EqualFold(oldName, newName) {
+		fmt.Println(colorize("ℹ️  Old and new profile names are identical.", ColorYellow))
+		return
+	}
+
+	_, _, profilesDir, currentFile, _, _, _ := getPaths()
+	oldPath := filepath.Join(profilesDir, oldName+".json")
+	newPath := filepath.Join(profilesDir, newName+".json")
+
+	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+		fmt.Println(colorize(fmt.Sprintf("❌ Profile '%s' not found.", oldName), ColorRed))
+		cmdList()
+		return
+	}
+
+	if _, err := os.Stat(newPath); err == nil {
+		fmt.Println(colorize(fmt.Sprintf("❌ Profile '%s' already exists. Choose another name.", newName), ColorRed))
+		return
+	}
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		fmt.Printf(colorize("❌ Failed to rename profile: %v\n", ColorRed), err)
+		return
+	}
+
+	// Update .current if this was the active profile
+	if b, err := os.ReadFile(currentFile); err == nil {
+		if strings.TrimSpace(string(b)) == oldName {
+			_ = os.WriteFile(currentFile, []byte(newName), 0600)
+		}
+	}
+
+	// Migrate cooldown entry if exists
+	cooldowns := loadCooldowns()
+	if exp, exists := cooldowns[oldName]; exists {
+		delete(cooldowns, oldName)
+		cooldowns[newName] = exp
+		saveCooldowns(cooldowns)
+	}
+
+	fmt.Println()
+	fmt.Println(colorize(fmt.Sprintf("✅ Profile renamed from '%s' to '%s' successfully!", oldName, newName), ColorBold+ColorGreen))
+	fmt.Println()
+}
+
 func cmdCooldown(args []string) {
 	if len(args) == 0 {
 		cooldowns := loadCooldowns()
@@ -496,6 +555,7 @@ CORE COMMANDS:
   agy-switch switch <name> (use)     Switch to specified profile
   agy-switch current (whoami, status)Display active account details
   agy-switch login [name]            Log in to a new Google account and save profile
+  agy-switch rename <old> <new> (mv) Rename a saved profile
   agy-switch remove <name> (rm)      Delete a profile
   agy-switch cooldown [clear|<name>] View or reset rate-limit cooldown status
 
@@ -543,6 +603,12 @@ func main() {
 			name = args[1]
 		}
 		cmdLoginNew(name)
+	case "rename", "mv":
+		if len(args) < 3 {
+			fmt.Println(colorize("❌ Please specify both old and new names: agy-switch rename <old> <new>", ColorRed))
+			return
+		}
+		cmdRename(args[1], args[2])
 	case "remove", "rm", "delete":
 		if len(args) < 2 {
 			fmt.Println(colorize("❌ Please provide profile name: agy-switch rm <name>", ColorRed))

@@ -30,6 +30,7 @@ Written in **Golang (Go Standard Library)** and compiled into a standalone nativ
 | `agy-switch current` | `whoami`, `status` | View currently active account details |
 | `agy-switch save [name]` | `add` | Save current active session as a named profile |
 | `agy-switch login [name]` | | Interactive wizard to log in to a new account and save profile |
+| `agy-switch rename <old> <new>` | `mv` | Rename an existing saved profile |
 | `agy-switch remove <name>` | `rm`, `delete` | Delete a saved profile |
 | **`agy-switch run [args...]`** | | **Smart wrapper**: runs `agy` with auto-switch & `--continue` resume |
 | **`agy-switch watch start`** | | **Start background daemon** to auto-switch on 429 & send macOS alerts |
