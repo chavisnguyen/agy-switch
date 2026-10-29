@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var rateLimitRegex = regexp.MustCompile(`(?i)(RESOURCE_EXHAUSTED|\b429\b|Too Many Requests|rate limit reached|rate limit exceeded|rate_limit_exceeded|exhausted your daily quota|quota exceeded|exceeded your current quota|exceeded max quota|Individual quota reached|doRefreshQuota:.*error.*429|quota limit|Verify your account to continue)`)
+var rateLimitRegex = regexp.MustCompile(`(?i)(agent executor error.*(RESOURCE_EXHAUSTED|\b429\b)|streamGenerateContent.*(RESOURCE_EXHAUSTED|\b429\b)|RESOURCE_EXHAUSTED.*(code 429)|Individual quota reached|quota exceeded|exceeded your current quota|exceeded max quota|rate limit reached|rate limit exceeded|Verify your account to continue)`)
 
 func sendMacOSNotification(title, message string) {
 	script := fmt.Sprintf(`display notification "%s" with title "%s" sound name "Submarine"`,
