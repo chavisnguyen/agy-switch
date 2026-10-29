@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var rateLimitRegex = regexp.MustCompile(`(?i)(RESOURCE_EXHAUSTED|\b429\b|Too Many Requests|rate limit reached|rate limit exceeded|rate_limit_exceeded|exhausted your daily quota|quota exceeded|exceeded your current quota|exceeded max quota|Individual quota reached|doRefreshQuota:.*error.*429|quota limit)`)
+var rateLimitRegex = regexp.MustCompile(`(?i)(RESOURCE_EXHAUSTED|\b429\b|Too Many Requests|rate limit reached|rate limit exceeded|rate_limit_exceeded|exhausted your daily quota|quota exceeded|exceeded your current quota|exceeded max quota|Individual quota reached|doRefreshQuota:.*error.*429|quota limit|Verify your account to continue)`)
 
 func sendMacOSNotification(title, message string) {
 	script := fmt.Sprintf(`display notification "%s" with title "%s" sound name "Submarine"`,
@@ -37,7 +37,19 @@ func getActiveLogFilePath() string {
 }
 
 func handleRateLimitTrigger(sourceLine string) {
-	_, tokenPath, _, _, _, _, _ := getPaths()
+	_, tokenPath, profilesDir, _, _, _, _ := getPaths()
+
+	// Cross-process debounce (prevents double-switching if both runner and daemon are active)
+	lastSwitchFile := filepath.Join(profilesDir, ".last_switch")
+	if data, err := os.ReadFile(lastSwitchFile); err == nil {
+		if ts, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
+			if time.Now().Unix()-ts < 4 {
+				return
+			}
+		}
+	}
+	_ = os.WriteFile(lastSwitchFile, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0600)
+
 	activeInfo, _ := readTokenInfo(tokenPath)
 
 	currentProfile := "unknown"

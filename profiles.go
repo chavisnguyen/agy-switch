@@ -568,7 +568,20 @@ func switchProfileByName(name string) error {
 		return fmt.Errorf("profile '%s' not found", name)
 	}
 
-	// Backup current token
+	// 1. Sync currently active token back to previous profile's file to preserve refreshed access tokens
+	if curData, err := os.ReadFile(currentFile); err == nil {
+		prevName := strings.TrimSpace(string(curData))
+		if prevName != "" && prevName != name {
+			prevPath := filepath.Join(profilesDir, prevName+".json")
+			if _, err := os.Stat(prevPath); err == nil {
+				if tokInfo, err := readTokenInfo(tokenPath); err == nil && tokInfo != nil && tokInfo.RefreshToken != "" {
+					_ = copyFile(tokenPath, prevPath, 0600)
+				}
+			}
+		}
+	}
+
+	// 2. Backup current token
 	if _, err := os.Stat(tokenPath); err == nil {
 		_ = copyFile(tokenPath, backupPath, 0600)
 	}
