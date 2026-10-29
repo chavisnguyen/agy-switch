@@ -104,13 +104,16 @@ agy-switch
 
 ---
 
-## 🛠️ Build from Source
+## 🛠️ Quick Installation
 
 ```bash
 cd /Users/chavis/Documents/personal/tool/agy-switch
-go build -ldflags="-s -w" -o agy-switch .
-./agy-switch install
+make install
+source ~/.zshrc
 ```
+* Builds native binary with optimizations (`-ldflags="-s -w"`).
+* Links `/opt/homebrew/bin/agy-switch` globally.
+* Adds `alias agy="agy-switch run"` to `~/.zshrc` automatically for seamless auto-failover.
 
 ---
 
