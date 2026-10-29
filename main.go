@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -197,6 +199,10 @@ func cmdSwitch(name string) {
 		return
 	}
 
+	if targetProfile.IsCoolingDown {
+		fmt.Println(colorize(fmt.Sprintf("⚠️  Note: Profile '%s' is currently in cooldown (%s remaining).", name, targetProfile.CooldownRemain), ColorYellow))
+	}
+
 	if err := switchProfileByName(targetProfile.ProfileName); err != nil {
 		fmt.Printf(colorize("❌ Error switching profile: %v\n", ColorRed), err)
 		return
@@ -349,7 +355,7 @@ func cmdLoginNew(name string) {
 
 	// Defer restoration in case of interruption or cancellation
 	loginCompleted := false
-	defer func() {
+	cleanupRollback := func() {
 		if !loginCompleted {
 			if hadActiveFile {
 				_ = copyFile(tempActiveBak, tokenPath, 0600)
@@ -359,7 +365,19 @@ func cmdLoginNew(name string) {
 				_ = setKeychainPassword(keychainBackup)
 			}
 		}
+	}
+	defer cleanupRollback()
+
+	// Catch OS signals during login wizard to ensure rollback runs even on Ctrl+C
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cleanupRollback()
+		fmt.Println("\n" + colorize("Login cancelled. Previous account restored.", ColorYellow))
+		os.Exit(1)
 	}()
+	defer signal.Stop(sigChan)
 
 	// Temporarily clear credentials so agy starts genuine Google login
 	_ = os.Remove(tokenPath)
@@ -380,36 +398,37 @@ func cmdLoginNew(name string) {
 	}
 
 	newKeychain := getKeychainPassword()
-	keychainChanged := (newKeychain != "" && newKeychain != keychainBackup)
-	fileExists := false
-	if _, err := os.Stat(tokenPath); err == nil {
-		fileExists = true
+	hasNewKeychain := (newKeychain != "")
+	hasFile := false
+	if fi, err := os.Stat(tokenPath); err == nil && fi.Size() > 0 {
+		hasFile = true
 	}
 
-	if keychainChanged || fileExists {
+	if hasFile || hasNewKeychain {
 		targetPath := filepath.Join(profilesDir, name+".json")
 		email := "N/A"
 
-		if keychainChanged {
+		if hasFile {
+			// Token file on disk was written by agy and contains the full OIDC id_token
+			_ = copyFile(tokenPath, targetPath, 0600)
+			info, _ := readTokenInfo(tokenPath)
+			if info != nil {
+				email = info.Email
+			}
+			// Sync keychain from file
+			var tokFile OAuthTokenFile
+			data, _ := os.ReadFile(tokenPath)
+			if err := json.Unmarshal(data, &tokFile); err == nil {
+				_ = syncKeychainFromTokenFile(tokFile, email)
+			}
+		} else if hasNewKeychain {
+			// agy wrote to Keychain only
 			tokFile, emailFromKeyring, err := parseKeychainToken(newKeychain)
 			if err == nil && tokFile != nil {
 				data, _ := json.MarshalIndent(tokFile, "", "  ")
 				_ = os.WriteFile(targetPath, data, 0600)
 				_ = os.WriteFile(tokenPath, data, 0600)
 				email = emailFromKeyring
-			} else if fileExists {
-				_ = copyFile(tokenPath, targetPath, 0600)
-			}
-		} else if fileExists {
-			_ = copyFile(tokenPath, targetPath, 0600)
-			info, _ := readTokenInfo(tokenPath)
-			if info != nil {
-				email = info.Email
-			}
-			var tokFile OAuthTokenFile
-			data, _ := os.ReadFile(tokenPath)
-			if err := json.Unmarshal(data, &tokFile); err == nil {
-				_ = syncKeychainFromTokenFile(tokFile, email)
 			}
 		}
 
@@ -429,7 +448,7 @@ func cmdLoginNew(name string) {
 
 func cmdRemove(name string) {
 	name = sanitizeName(name)
-	_, _, profilesDir, _, _, _, _ := getPaths()
+	_, _, profilesDir, currentFile, _, _, _ := getPaths()
 	target := filepath.Join(profilesDir, name+".json")
 
 	if _, err := os.Stat(target); os.IsNotExist(err) {
@@ -443,6 +462,14 @@ func cmdRemove(name string) {
 	if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
 		_ = os.Remove(target)
 		clearProfileCooldown(name)
+
+		// Remove .current if it points to the deleted profile to prevent stale reference
+		if b, err := os.ReadFile(currentFile); err == nil {
+			if strings.TrimSpace(string(b)) == name {
+				_ = os.Remove(currentFile)
+			}
+		}
+
 		fmt.Println(colorize(fmt.Sprintf("🗑️  Deleted profile '%s'.", name), ColorGreen))
 	} else {
 		fmt.Println("Cancelled.")

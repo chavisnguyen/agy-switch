@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var rateLimitRegex = regexp.MustCompile(`(?i)(RESOURCE_EXHAUSTED|429 Too Many Requests|rate limit reached|exhausted your daily quota|quota exceeded|exceeded your current quota|exceeded max quota|doRefreshQuota:.*error.*429)`)
+var rateLimitRegex = regexp.MustCompile(`(?i)(RESOURCE_EXHAUSTED|\b429\b|Too Many Requests|rate limit reached|rate limit exceeded|rate_limit_exceeded|exhausted your daily quota|quota exceeded|exceeded your current quota|exceeded max quota|Individual quota reached|doRefreshQuota:.*error.*429|quota limit)`)
 
 func sendMacOSNotification(title, message string) {
 	script := fmt.Sprintf(`display notification "%s" with title "%s" sound name "Submarine"`,
@@ -90,6 +90,7 @@ func watchLoop(stopChan <-chan struct{}) {
 	var currentPath string
 	var reader *bufio.Reader
 	var lastTrigger time.Time
+	var partialLine strings.Builder
 
 	cleanup := func() {
 		if currentLogFile != nil {
@@ -123,9 +124,13 @@ func watchLoop(stopChan <-chan struct{}) {
 			// Seek to end so we don't replay historical rate limits
 			_, _ = currentLogFile.Seek(0, io.SeekEnd)
 			reader = bufio.NewReader(currentLogFile)
+			partialLine.Reset()
 		}
 
-		line, err := reader.ReadString('\n')
+		chunk, err := reader.ReadString('\n')
+		if len(chunk) > 0 {
+			partialLine.WriteString(chunk)
+		}
 		if err != nil {
 			if err == io.EOF {
 				time.Sleep(300 * time.Millisecond)
@@ -134,6 +139,9 @@ func watchLoop(stopChan <-chan struct{}) {
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+
+		line := partialLine.String()
+		partialLine.Reset()
 
 		// Check if line matches rate limit error
 		if rateLimitRegex.MatchString(line) {
@@ -172,9 +180,12 @@ func cmdWatch(args []string) {
 		}
 
 		cmd := exec.Command(execPath, "watch", "--daemon-internal")
-		cmd.Stdin = nil
-		cmd.Stdout = nil
-		cmd.Stderr = nil
+		devNull, errDev := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if errDev == nil {
+			cmd.Stdin = devNull
+			cmd.Stdout = devNull
+			cmd.Stderr = devNull
+		}
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Setsid: true, // detach from terminal
 		}
@@ -247,5 +258,17 @@ func isDaemonRunning(pidFile string) bool {
 
 	// Signal 0 checks process existence without killing it
 	err = syscall.Kill(pid, 0)
-	return err == nil
+	if err != nil {
+		return false
+	}
+
+	// Double check process name on macOS to avoid recycled PID collisions
+	out, errCmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
+	if errCmd == nil {
+		comm := strings.TrimSpace(string(out))
+		if strings.Contains(comm, "agy-switch") {
+			return true
+		}
+	}
+	return false
 }

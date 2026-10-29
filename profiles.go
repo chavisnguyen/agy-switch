@@ -29,6 +29,7 @@ type TokenDetails struct {
 	TokenType    string `json:"token_type"`
 	RefreshToken string `json:"refresh_token"`
 	Expiry       string `json:"expiry"`
+	ExpiresIn    int64  `json:"expires_in,omitempty"`
 }
 
 type JWTPayload struct {
@@ -310,7 +311,6 @@ func getAllProfiles() ([]ProfileInfo, error) {
 	}
 
 	var profiles []ProfileInfo
-	matchedOne := false
 	now := time.Now().Unix()
 
 	for _, entry := range entries {
@@ -326,25 +326,6 @@ func getAllProfiles() ([]ProfileInfo, error) {
 		}
 
 		info.ProfileName = pName
-		isActive := false
-
-		if activeInfo != nil {
-			if currentSaved != "" && pName == currentSaved {
-				isActive = true
-				matchedOne = true
-			} else if currentSaved == "" && !matchedOne {
-				if info.Hash != "" && info.Hash == activeInfo.Hash {
-					isActive = true
-					matchedOne = true
-				} else if info.RefreshToken != "" && info.RefreshToken == activeInfo.RefreshToken {
-					isActive = true
-					matchedOne = true
-				} else if info.Sub != "" && info.Sub == activeInfo.Sub {
-					isActive = true
-					matchedOne = true
-				}
-			}
-		}
 
 		// Cooldown check
 		if exp, exists := cooldowns[pName]; exists && exp > now {
@@ -353,8 +334,67 @@ func getAllProfiles() ([]ProfileInfo, error) {
 			info.CooldownRemain = fmt.Sprintf("%dm left", int(rem.Minutes()))
 		}
 
-		info.IsActive = isActive
 		profiles = append(profiles, *info)
+	}
+
+	// Match active profile based on actual active credentials first
+	activeIdx := -1
+	if activeInfo != nil {
+		// Priority 1: Exact file hash match
+		for idx, p := range profiles {
+			if p.Hash != "" && p.Hash == activeInfo.Hash {
+				if activeIdx == -1 || p.ProfileName == currentSaved {
+					activeIdx = idx
+				}
+			}
+		}
+		// Priority 2: Refresh token match
+		if activeIdx == -1 && activeInfo.RefreshToken != "" {
+			for idx, p := range profiles {
+				if p.RefreshToken != "" && p.RefreshToken == activeInfo.RefreshToken {
+					if activeIdx == -1 || p.ProfileName == currentSaved {
+						activeIdx = idx
+					}
+				}
+			}
+		}
+		// Priority 3: Subject ID match
+		if activeIdx == -1 && activeInfo.Sub != "" {
+			for idx, p := range profiles {
+				if p.Sub != "" && p.Sub == activeInfo.Sub {
+					if activeIdx == -1 || p.ProfileName == currentSaved {
+						activeIdx = idx
+					}
+				}
+			}
+		}
+		// Priority 4: Email match
+		if activeIdx == -1 && activeInfo.Email != "" && activeInfo.Email != "Unknown email" {
+			for idx, p := range profiles {
+				if strings.EqualFold(p.Email, activeInfo.Email) {
+					if activeIdx == -1 || p.ProfileName == currentSaved {
+						activeIdx = idx
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to currentSaved if active token couldn't be inspected
+	if activeIdx == -1 && currentSaved != "" {
+		for idx, p := range profiles {
+			if p.ProfileName == currentSaved {
+				activeIdx = idx
+				break
+			}
+		}
+	}
+
+	if activeIdx >= 0 && activeIdx < len(profiles) {
+		profiles[activeIdx].IsActive = true
+		if profiles[activeIdx].ProfileName != currentSaved {
+			_ = os.WriteFile(currentFile, []byte(profiles[activeIdx].ProfileName), 0600)
+		}
 	}
 
 	sort.Slice(profiles, func(i, j int) bool {
@@ -387,12 +427,17 @@ func switchNextProfile(reason string) (string, error) {
 	}
 
 	// Round-robin selection: pick next non-cooldown profile
+	startIdx := 0
+	if activeIdx >= 0 {
+		startIdx = activeIdx
+	}
+
 	var selected string
 	for offset := 1; offset <= len(profiles); offset++ {
-		candidateIdx := (activeIdx + offset) % len(profiles)
+		candidateIdx := (startIdx + offset) % len(profiles)
 		candidate := profiles[candidateIdx]
 
-		if candidateIdx == activeIdx {
+		if activeIdx >= 0 && candidateIdx == activeIdx {
 			continue
 		}
 
