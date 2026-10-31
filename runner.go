@@ -209,6 +209,8 @@ func cmdRun(customArgs []string) {
 			}
 		}
 
+		preLaunchLogFile := getActiveLogFilePath()
+
 		cmd := exec.Command("agy", cmdArgs...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
@@ -282,9 +284,10 @@ func cmdRun(customArgs []string) {
 					currentPath = resolved
 					partialLine.Reset()
 
-					// If this is the newly created log for this session, read from beginning
-					// Otherwise seek to end of existing file
-					if attempt == 1 && reader == nil {
+					// If this is a pre-existing log file from previous session/attempt, seek to end
+					// so we only monitor fresh lines and never re-read stale errors.
+					// If agy rotated to a new session log file for this run, read from the beginning.
+					if resolved == preLaunchLogFile {
 						_, _ = currentLogFile.Seek(0, io.SeekEnd)
 					} else {
 						_, _ = currentLogFile.Seek(0, io.SeekStart)
