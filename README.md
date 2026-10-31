@@ -27,20 +27,21 @@ Google Antigravity (`agy`) is powerful, but when hitting rate limits (HTTP 429 /
 
 ---
 
-## 📦 Installation
+## 📦 Quick Installation
 
-### Prerequisites
-- macOS (Apple Silicon or Intel)
-- [Go 1.22+](https://go.dev/) (for compiling from source)
-- [Antigravity CLI](https://antigravity.google/) (`agy`) installed
+### Method 1: One-Line Install (No Go Required ⚡)
+Run this single command in your terminal. It automatically detects your machine's OS/architecture and downloads the pre-built binary:
+```bash
+curl -fsSL https://raw.githubusercontent.com/chavisnguyen/agy-switch/master/install.sh | bash
+```
 
-### 1-Line Build & Install
+### Method 2: Build From Source (Requires Go 1.22+)
 ```bash
 git clone https://github.com/chavisnguyen/agy-switch.git
 cd agy-switch
 make install
 ```
-This builds the optimized native binary and installs `agys` globally into `/opt/homebrew/bin/agys` (or `~/.local/bin/agys`).
+This compiles the optimized native binary and installs `agys` globally into `/opt/homebrew/bin/agys` (or `~/.local/bin/agys`).
 
 ---
 

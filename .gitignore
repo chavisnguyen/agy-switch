@@ -1,6 +1,7 @@
 # Binaries
 agys
 agy-switch
+dist/
 *.exe
 *.dll
 *.so
