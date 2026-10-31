@@ -1,8 +1,46 @@
-# 🚀 agys (agy-switch)
+# 🚀 agys
 
-> **A blazing-fast, lightweight, and secure multi-account manager with automatic rate-limit failover for Google Antigravity CLI (`agy`).**
+<p align="center">
+  <b>A blazing-fast, lightweight, and zero-dependency multi-account manager & auto-failover runner for Google Antigravity CLI (<code>agy</code>).</b>
+</p>
 
-Written in **Golang (Go Standard Library)** and compiled into a standalone native binary with zero runtime dependencies. It enables instant 1-second switching between Google accounts and provides **automatic failover** when hitting HTTP 429 / Quota limits.
+<p align="center">
+  <img src="https://img.shields.io/badge/Language-Go%201.22+-00ADD8?style=flat-square&logo=go" alt="Go" />
+  <img src="https://img.shields.io/badge/Platform-macOS-black?style=flat-square&logo=apple" alt="macOS" />
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/Dependencies-Zero-blue?style=flat-square" alt="Zero Dependencies" />
+</p>
+
+---
+
+## 🌟 Why `agys`?
+
+Google Antigravity (`agy`) is powerful, but when hitting rate limits (HTTP 429 / `RESOURCE_EXHAUSTED`), manually switching accounts, copying tokens, or restarting conversations disrupts your flow.
+
+**`agys`** solves this with a standalone, native Go binary (compiled with standard library only):
+- ⚡ **Instant Switching**: Switch profiles in under a second with atomic file writes and macOS Keychain sync.
+- 📊 **Real-Time Quotas**: Check Claude Sonnet and Gemini quotas + reset schedules for all your accounts at a glance.
+- 🔄 **Smart Auto-Failover**: Run `agys run` to automatically rotate to a healthy account when hitting rate limits and resume your conversation without losing context (`--continue`).
+- 🏷️ **Dynamic Tab Titles**: Keeps your terminal tab title synced with the actual chat topic (supports Ghostty, CMUX, iTerm2, Kitty, and macOS Terminal).
+- ⏱️ **Intelligent Cooldowns**: Automatically cools down exhausted accounts for 30 minutes to prevent switching cycles.
+- 🔒 **100% Private & Secure**: Tokens stay strictly on your local disk with `0600` permissions. No telemetry, no third-party servers.
+
+---
+
+## 📦 Installation
+
+### Prerequisites
+- macOS (Apple Silicon or Intel)
+- [Go 1.22+](https://go.dev/) (for compiling from source)
+- [Antigravity CLI](https://antigravity.google/) (`agy`) installed
+
+### 1-Line Build & Install
+```bash
+git clone https://github.com/chavisnguyen/agy-switch.git
+cd agy-switch
+make install
+```
+This builds the optimized native binary and installs `agys` globally into `/opt/homebrew/bin/agys` (or `~/.local/bin/agys`).
 
 ---
 
@@ -10,109 +48,134 @@ Written in **Golang (Go Standard Library)** and compiled into a standalone nativ
 
 | Command | Description |
 | :--- | :--- |
-| `agys` | Open interactive selection menu |
+| `agys` | Interactive numbered menu to select and switch accounts |
 | `agys <profile>` | Instantly switch to `<profile>` |
-| `agys next` | Rotate to the next available account (Round-Robin) |
-| `agys list` | List all saved profiles with real-time Claude & Gemini quotas |
-| `agys status` | View currently active account details and real-time quota |
+| `agys next` | Rotate to the next available healthy profile (Round-Robin) |
+| `agys status` | View active account details and real-time Claude/Gemini quotas |
+| `agys list` | Formatted table of all saved profiles and quota percentages |
 | `agys save [name]` | Save current active session as a named profile |
-| `agys login [name]` | Interactive wizard to log in to a new account and save profile |
+| `agys login [name]` | Interactive wizard to authenticate a new Google account |
 | `agys rename <old> <new>` | Rename an existing saved profile |
 | `agys remove <name>` | Delete a saved profile |
-| **`agys run [args...]`** | **Smart wrapper**: runs `agy` with auto-switch & `--continue` resume |
-| **`agys watch start`** | **Start background daemon** to auto-switch on 429 & send macOS alerts |
+| **`agys run [args...]`** | **Smart runner**: runs `agy` with auto-failover, resume hints & tab sync |
+| **`agys watch start`** | **Background daemon**: monitors 429 errors and auto-switches tokens |
 | `agys watch stop` | Stop the background watcher daemon |
-| `agys watch status` | Check status of the watcher daemon |
-| `agys cooldown` | View profiles currently in cooldown |
+| `agys watch status` | Check status and PID of the watcher daemon |
+| `agys cooldown` | View profiles currently in cooldown penalty |
 | `agys cooldown clear` | Clear all cooldown penalties immediately |
-| `agys install` | Link binary globally to `/opt/homebrew/bin/agys` |
+| `agys help` | Display built-in help |
 
 ---
 
-## ⚡ How Auto-Switch Works
+## 🚀 Quick Walkthrough
 
-### Option 1: The Smart Runner (`agy-switch run`)
-Instead of launching `agy` directly, run:
+### 1. Save Your Existing Active Account
+If you already logged into `agy`:
 ```bash
-agy-switch run
-```
-*(Or create a shell alias: `alias agy="agy-switch run"`)*
-
-* When `agy` encounters a Rate Limit / `RESOURCE_EXHAUSTED` error during a conversation turn:
-  1. `agy-switch` detects the 429 error in real-time.
-  2. Marks the exhausted account in cooldown for 30 minutes.
-  3. Automatically swaps `antigravity-oauth-token` to the next healthy account in your pool.
-  4. Automatically resumes your conversation with `--continue` — **your chat session continues uninterrupted without losing context!**
-
-### Option 2: The Background Watcher Daemon (`agy-switch watch`)
-If you prefer running `agy` natively in various terminal tabs or IDEs:
-```bash
-# Start background watcher
-agy-switch watch start
-
-# Check status
-agy-switch watch status
-
-# Stop background watcher
-agy-switch watch stop
-```
-* The daemon quietly monitors `~/.gemini/antigravity-cli/cli.log` with virtually zero CPU/RAM overhead (~3MB).
-* As soon as any session logs a quota exhaustion error, the daemon swaps tokens immediately on disk and sends a macOS desktop notification:
-  > 🔔 **agy-switch: Quota Auto-Switch**  
-  > *Quota limit on 'main'. Auto-switched to 'work'!*
-
----
-
-## 🚀 Quick Start Guide
-
-### 1. Save Your Current Account
-```bash
-agy-switch save main
+agys save main
 ```
 
-### 2. Add More Accounts
-Use the built-in login helper:
+### 2. Add Additional Google Accounts
+Use the login wizard to add more accounts without losing your existing session:
 ```bash
-agy-switch login work
+agys login work
 ```
-*The wizard temporarily stashes your active session, launches `agy` to authenticate via Google in your browser, and saves the new token as `work` when you type `/exit`.*
+*The wizard temporarily stashes your active session, launches `agy` for Google browser login, saves the new profile as `work`, and restores cleanly.*
 
-### 3. Switch Between Accounts
+### 3. Check Real-Time Quotas
 ```bash
-# Direct switch by name
-agy-switch work
+agys status
+```
+Output preview:
+```text
+📊 AGY ACCOUNTS STATUS & QUOTA
+══════════════════════════════════════════════════════════
+[1] work (● ACTIVE)
+    Email  : work.developer@gmail.com
+    Claude : 🟢 100.0% (resets 31 Oct 22:54)
+    Gemini : 🟢  76.1% (resets 31 Oct 20:13)
+    ──────────────────────────────────────────────────
+[2] main (○ Ready)
+    Email  : personal@gmail.com
+    Claude : 🔴   0.0% (resets 02 Nov 21:20)
+    Gemini : 🟡   0.1% (resets 31 Oct 21:00)
+    ──────────────────────────────────────────────────
+[3] personal2 (○ Ready)
+    Email  : personal2@gmail.com
+    Claude : 🔴   0.0% (resets 05 Nov 14:39)
+    Gemini : 🔴   0.0% (resets 04 Nov 01:12)
+══════════════════════════════════════════════════════════
+```
 
-# Or rotate to the next available account
-agy-switch next
+### 4. Switch Accounts On The Fly
+```bash
+# Switch directly
+agys main
 
-# Or use the interactive menu
-agy-switch
+# Or rotate to next healthy account
+agys next
+
+# Or open interactive menu
+agys
 ```
 
 ---
 
-## 🛠️ Quick Installation
+## ⚡ Smart Runner (`agys run`)
 
+Run `agy` through `agys run` for uninterrupted development:
 ```bash
-cd /Users/chavis/Documents/personal/tool/agy-switch
-make install
-source ~/.zshrc
+# Start a new task
+agys run
+
+# Or continue a previous conversation
+agys run --continue
+agys run --conversation=5af43360-c5c2-4331-98e9-7a65630a90fb
 ```
-* Builds native binary with optimizations (`-ldflags="-s -w"`).
-* Links `/opt/homebrew/bin/agy-switch` globally.
-* Adds `alias agy="agy-switch run"` to `~/.zshrc` automatically for seamless auto-failover.
+
+### What happens when you hit a Rate Limit?
+1. `agys` catches the 429 / `RESOURCE_EXHAUSTED` error in real-time.
+2. Puts the exhausted account into a 30-minute cooldown.
+3. Automatically rotates tokens to the next healthy account.
+4. Auto-resumes your conversation with `--continue` — **your coding session continues without losing state or context!**
+
+### Dynamic Tab Title Sync
+When running `agys run`, your terminal tab title automatically reflects the conversation's real topic name (e.g., `Building MCP Server`) instead of generic command strings. Compatible with CMUX, Ghostty, iTerm2, and macOS Terminal.
+
+### Easy Resume Hints
+When your session ends, `agys run` prints a quick copy-paste command to pick up right where you left off:
+```text
+To continue this conversation with auto-failover, run:
+  agys run --conversation=5af43360-c5c2-4331-98e9-7a65630a90fb
+```
+
+---
+
+## 🛡️ Architecture & Security
+
+- **Atomic Token Swapping**: Writes tokens to temporary files before atomic rename, preventing file corruption if interrupted.
+- **Keychain Synchronization**: Encodes tokens and syncs with macOS Keychain (`security add-generic-password -s gemini -a antigravity`) so both Antigravity CLI and IDE stay synchronized.
+- **Zero Secrets in Repository**: Google OAuth client credentials are obfuscated and resolved at runtime.
+- **Local Storage (`0600`)**: Profiles are stored in `~/.gemini/antigravity-cli/profiles/` accessible only by your user account.
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-/Users/chavis/Documents/personal/tool/agy-switch/
-├── go.mod          # Go module file
+.
 ├── main.go         # CLI router, list, and interactive commands
-├── profiles.go     # Profile storage, JWT decode, atomic swap & cooldowns
-├── watcher.go      # Log tailer, regex detector, daemon & macOS notifications
-├── runner.go       # Smart wrapper with auto-switch & conversation resume
-├── agy-switch      # Native compiled arm64 binary
+├── profiles.go     # Profile storage, JWT decode, atomic swap & Keychain sync
+├── quota.go        # Parallel real-time quota inspection (Claude & Gemini)
+├── runner.go       # Smart wrapper: 429 auto-failover, tab title sync & hints
+├── watcher.go      # Log tailer, regex detector, background daemon & macOS alerts
+├── install.sh      # Build and symlink script
+├── Makefile        # make build, make install, make clean
 └── README.md       # Documentation
 ```
+
+---
+
+## 📄 License
+
+MIT License. Feel free to use, modify, and distribute.
