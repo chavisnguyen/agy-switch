@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -93,7 +95,7 @@ func getFolderConversations(targetDir string, isAll bool, limit int) ([]Conversa
 	}
 
 	if limit <= 0 {
-		limit = 25
+		limit = 20
 	}
 
 	var query string
@@ -138,42 +140,232 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-func cmdConversations(args []string) {
-	targetDir, _ := os.Getwd()
-	listOnly := false
-	isAll := false
-	directChoice := -1
+func getSttyState() string {
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = os.Stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
 
-	for _, a := range args {
-		if a == "-l" || a == "--list" {
-			listOnly = true
-		} else if a == "-a" || a == "--all" {
-			isAll = true
-		} else if num, err := strconv.Atoi(a); err == nil && num > 0 {
-			directChoice = num
-		} else if strings.HasPrefix(a, "~/") {
-			home, _ := os.UserHomeDir()
-			targetDir = filepath.Join(home, a[2:])
-		} else if fi, err := os.Stat(a); err == nil && fi.IsDir() {
-			if abs, err := filepath.Abs(a); err == nil {
-				targetDir = abs
+func restoreSttyState(state string) {
+	if state != "" {
+		cmd := exec.Command("stty", state)
+		cmd.Stdin = os.Stdin
+		_ = cmd.Run()
+	} else {
+		cmd := exec.Command("stty", "sane")
+		cmd.Stdin = os.Stdin
+		_ = cmd.Run()
+	}
+}
+
+func isTerminalStdin() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+func selectConversationInteractive(convs []ConversationSummary, activeID string, isAll bool, targetDir string) int {
+	if len(convs) == 0 {
+		return -1
+	}
+
+	selectedIdx := 0
+	if activeID != "" {
+		for i, c := range convs {
+			if c.ConversationID == activeID {
+				selectedIdx = i
+				break
 			}
-		} else if !strings.HasPrefix(a, "-") {
-			// Workspace name or custom directory pattern
-			targetDir = a
 		}
 	}
 
-	if !isAll {
-		targetDir = strings.TrimRight(targetDir, "/")
+	savedState := getSttyState()
+	defer func() {
+		restoreSttyState(savedState)
+		fmt.Print("\033[?25h") // Show cursor
+	}()
+
+	// Guarantee clean restore on OS interrupt
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+	go func() {
+		<-sigChan
+		restoreSttyState(savedState)
+		fmt.Print("\033[?25h\r\n")
+		os.Exit(1)
+	}()
+
+	// Raw mode: non-canonical, no echo, min 1 byte, 100ms timeout
+	_ = exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1").Run()
+	fmt.Print("\033[?25l") // Hide cursor
+
+	totalLines := len(convs) + 7
+
+	render := func(firstRender bool) {
+		if !firstRender {
+			fmt.Printf("\033[%dA\r", totalLines)
+		}
+
+		if isAll {
+			fmt.Print(colorize("💬 ALL RECENT AGY CONVERSATIONS", ColorBold+ColorCyan) + "\033[K\r\n")
+		} else {
+			fmt.Print(colorize(fmt.Sprintf("💬 CONVERSATIONS FOR: %s", targetDir), ColorBold+ColorCyan) + "\033[K\r\n")
+		}
+		fmt.Print(colorize(strings.Repeat("═", 92), ColorDim) + "\033[K\r\n")
+
+		header := fmt.Sprintf("  %-5s %-38s %-7s %-18s %-18s", "ID", "TITLE", "STEPS", "LAST ACTIVE", "CONV ID")
+		fmt.Print(header + "\033[K\r\n")
+		fmt.Print(colorize(strings.Repeat("─", 92), ColorDim) + "\033[K\r\n")
+
+		for idx, c := range convs {
+			isSelected := (idx == selectedIdx)
+			isActive := (activeID != "" && c.ConversationID == activeID) || (!isAll && activeID == "" && idx == 0)
+
+			numTag := fmt.Sprintf("[%d]", idx+1)
+			title := c.Title
+			if title == "" {
+				title = "(Untitled conversation)"
+			}
+			title = truncateString(title, 36)
+			relTime := formatRelativeTime(c.LastModifiedTime)
+
+			shortUUID := c.ConversationID
+			if len(shortUUID) > 13 {
+				shortUUID = shortUUID[:8] + "…"
+			}
+
+			activeTag := " "
+			if isActive {
+				activeTag = colorize("●", ColorGreen)
+			}
+
+			pointer := "  "
+			if isSelected {
+				pointer = colorize("❯ ", ColorBold+ColorCyan)
+				numTag = colorize(numTag, ColorBold+ColorCyan)
+				title = colorize(title, ColorBold)
+			} else {
+				numTag = colorize(numTag, ColorDim)
+			}
+
+			stepStr := fmt.Sprintf("%d", c.StepCount)
+			row := fmt.Sprintf("%s%-5s %-38s %-7s %-18s %-18s%s",
+				pointer,
+				numTag,
+				title,
+				stepStr,
+				relTime,
+				shortUUID,
+				activeTag,
+			)
+			fmt.Print(row + "\033[K\r\n")
+		}
+
+		fmt.Print(colorize(strings.Repeat("─", 92), ColorDim) + "\033[K\r\n")
+		if activeID != "" {
+			fmt.Print(colorize("● indicates current active session for this folder", ColorDim) + "\033[K\r\n")
+		} else {
+			fmt.Print("\033[K\r\n")
+		}
+
+		helpText := fmt.Sprintf("%s • %s • %s • %s",
+			colorize("↑/↓ or j/k: navigate", ColorCyan),
+			colorize("Enter: resume", ColorBold+ColorGreen),
+			colorize("1-9: jump", ColorYellow),
+			colorize("q/Esc: cancel", ColorDim),
+		)
+		fmt.Print(helpText + "\033[K\r\n")
 	}
 
-	convs, activeID, err := getFolderConversations(targetDir, isAll, 25)
-	if err != nil {
-		fmt.Printf(colorize("❌ Error fetching conversations: %v\n", ColorRed), err)
-		return
-	}
+	render(true)
 
+	buf := make([]byte, 16)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return -1
+		}
+		if n == 0 {
+			continue
+		}
+
+		// Single byte key
+		if n == 1 {
+			b := buf[0]
+			switch b {
+			case 3, 27, 'q', 'Q': // Ctrl+C, Esc, q
+				return -1
+			case 10, 13, ' ': // Enter, Space
+				return selectedIdx
+			case 'k', 'K': // vim up
+				if selectedIdx > 0 {
+					selectedIdx--
+				} else {
+					selectedIdx = len(convs) - 1
+				}
+				render(false)
+			case 'j', 'J': // vim down
+				if selectedIdx < len(convs)-1 {
+					selectedIdx++
+				} else {
+					selectedIdx = 0
+				}
+				render(false)
+			case 'g': // top
+				selectedIdx = 0
+				render(false)
+			case 'G': // bottom
+				selectedIdx = len(convs) - 1
+				render(false)
+			default:
+				if b >= '1' && b <= '9' {
+					num := int(b - '0')
+					if num <= len(convs) {
+						return num - 1 // immediate select
+					}
+				}
+			}
+			continue
+		}
+
+		// Multi-byte sequence (arrow keys, home, end)
+		if buf[0] == 27 {
+			if n >= 3 && (buf[1] == '[' || buf[1] == 'O') {
+				switch buf[2] {
+				case 'A': // Up
+					if selectedIdx > 0 {
+						selectedIdx--
+					} else {
+						selectedIdx = len(convs) - 1
+					}
+					render(false)
+				case 'B': // Down
+					if selectedIdx < len(convs)-1 {
+						selectedIdx++
+					} else {
+						selectedIdx = 0
+					}
+					render(false)
+				case 'H': // Home
+					selectedIdx = 0
+					render(false)
+				case 'F': // End
+					selectedIdx = len(convs) - 1
+					render(false)
+				}
+			}
+		}
+	}
+}
+
+func printConversationsTable(convs []ConversationSummary, activeID string, isAll bool, targetDir string) {
 	fmt.Println()
 	if isAll {
 		fmt.Println(colorize("💬 ALL RECENT AGY CONVERSATIONS", ColorBold+ColorCyan))
@@ -189,8 +381,7 @@ func cmdConversations(args []string) {
 		return
 	}
 
-	// Table header
-	header := fmt.Sprintf("%-5s %-38s %-7s %-18s %-18s", "ID", "TITLE", "STEPS", "LAST ACTIVE", "CONV ID")
+	header := fmt.Sprintf("  %-5s %-38s %-7s %-18s %-18s", "ID", "TITLE", "STEPS", "LAST ACTIVE", "CONV ID")
 	fmt.Println(header)
 	fmt.Println(colorize(strings.Repeat("─", 92), ColorDim))
 
@@ -220,7 +411,7 @@ func cmdConversations(args []string) {
 		}
 
 		stepStr := fmt.Sprintf("%d", c.StepCount)
-		row := fmt.Sprintf("%-5s %-38s %-7s %-18s %-18s%s",
+		row := fmt.Sprintf("  %-5s %-38s %-7s %-18s %-18s%s",
 			numTag,
 			title,
 			stepStr,
@@ -235,8 +426,50 @@ func cmdConversations(args []string) {
 	if activeID != "" {
 		fmt.Println(colorize("● indicates current active session for this folder", ColorDim))
 	}
+	fmt.Println()
+}
 
-	// If direct choice was passed in args (e.g. `agys conv 2`)
+func cmdConversations(args []string) {
+	targetDir, _ := os.Getwd()
+	listOnly := false
+	isAll := false
+	directChoice := -1
+
+	for _, a := range args {
+		if a == "-l" || a == "--list" {
+			listOnly = true
+		} else if a == "-a" || a == "--all" {
+			isAll = true
+		} else if num, err := strconv.Atoi(a); err == nil && num > 0 {
+			directChoice = num
+		} else if strings.HasPrefix(a, "~/") {
+			home, _ := os.UserHomeDir()
+			targetDir = filepath.Join(home, a[2:])
+		} else if fi, err := os.Stat(a); err == nil && fi.IsDir() {
+			if abs, err := filepath.Abs(a); err == nil {
+				targetDir = abs
+			}
+		} else if !strings.HasPrefix(a, "-") {
+			targetDir = a
+		}
+	}
+
+	if !isAll {
+		targetDir = strings.TrimRight(targetDir, "/")
+	}
+
+	convs, activeID, err := getFolderConversations(targetDir, isAll, 20)
+	if err != nil {
+		fmt.Printf(colorize("❌ Error fetching conversations: %v\n", ColorRed), err)
+		return
+	}
+
+	if len(convs) == 0 {
+		printConversationsTable(convs, activeID, isAll, targetDir)
+		return
+	}
+
+	// 1. Direct argument passed (e.g. `agys conv 2`)
 	if directChoice > 0 {
 		if directChoice <= len(convs) {
 			selected := convs[directChoice-1]
@@ -249,13 +482,28 @@ func cmdConversations(args []string) {
 		return
 	}
 
+	// 2. List only
 	if listOnly {
-		fmt.Println()
+		printConversationsTable(convs, activeID, isAll, targetDir)
 		return
 	}
 
-	// Interactive prompt
-	fmt.Printf("\n%s (or press Enter to cancel): ", colorize(fmt.Sprintf("👉 Enter number to resume (1-%d)", len(convs)), ColorBold+ColorCyan))
+	// 3. Interactive arrow navigation if terminal
+	if isTerminalStdin() {
+		choiceIdx := selectConversationInteractive(convs, activeID, isAll, targetDir)
+		if choiceIdx < 0 {
+			fmt.Println(colorize("Cancelled.", ColorYellow))
+			return
+		}
+		selected := convs[choiceIdx]
+		fmt.Println(colorize(fmt.Sprintf("🚀 Resuming [%d]: %s", choiceIdx+1, selected.Title), ColorBold+ColorGreen))
+		cmdRun([]string{"--conversation=" + selected.ConversationID})
+		return
+	}
+
+	// 4. Fallback for non-TTY / pipe: plain text prompt
+	printConversationsTable(convs, activeID, isAll, targetDir)
+	fmt.Printf("%s (or press Enter to cancel): ", colorize(fmt.Sprintf("👉 Enter number to resume (1-%d)", len(convs)), ColorBold+ColorCyan))
 
 	reader := bufio.NewReader(os.Stdin)
 	input, _ := reader.ReadString('\n')
