@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/github/actions/workflow/status/chavisnguyen/agy-switch/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" />
   <img src="https://img.shields.io/badge/Language-Go%201.22+-00ADD8?style=flat-square&logo=go" alt="Go" />
   <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-black?style=flat-square&logo=apple" alt="Platforms" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
