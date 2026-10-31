@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,7 @@ import (
 	"time"
 )
 
-var convUUIDRegex = regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+var convUUIDRegex = regexp.MustCompile(`(?i)(?:conversation(?:_id)?[:\s=]+|cascade_id[:=]|--conversation[= ])([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
 
 func extractConversationID(args []string) string {
 	for _, a := range args {
@@ -60,6 +61,21 @@ func getConversationTitle(convID string) string {
 
 func getLatestConversationID() string {
 	cliHome, _, _, _, _, _, _ := getPaths()
+
+	// 1. Check cache/last_conversations.json for current working directory (most accurate for active session)
+	if cwd, err := os.Getwd(); err == nil {
+		cachePath := filepath.Join(cliHome, "cache", "last_conversations.json")
+		if data, err := os.ReadFile(cachePath); err == nil {
+			var m map[string]string
+			if json.Unmarshal(data, &m) == nil {
+				if id, ok := m[cwd]; ok && id != "" {
+					return id
+				}
+			}
+		}
+	}
+
+	// 2. Fallback to conversation_summaries.db filtered by current workspace
 	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return ""
@@ -68,8 +84,19 @@ func getLatestConversationID() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
-	out, err := cmd.Output()
+	if cwd, err := os.Getwd(); err == nil && cwd != "" {
+		query := fmt.Sprintf("SELECT conversation_id FROM conversation_summaries WHERE workspace_uris LIKE '%%%s%%' AND conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;", strings.ReplaceAll(cwd, "'", ""))
+		cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, query)
+		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return strings.TrimSpace(string(out))
+		}
+	}
+
+	// 3. Fallback to global latest conversation
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel2()
+	cmd2 := exec.CommandContext(ctx2, "sqlite3", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
+	out, err := cmd2.Output()
 	if err != nil {
 		return ""
 	}
@@ -112,6 +139,11 @@ func setTerminalTitle(title string) {
 func cmdRun(customArgs []string) {
 	fmt.Println(colorize("🚀 agys runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan))
 
+	activeConvID := extractConversationID(customArgs)
+	if activeConvID == "" {
+		activeConvID = getLatestConversationID()
+	}
+
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		rateLimitDetected := false
@@ -123,23 +155,45 @@ func cmdRun(customArgs []string) {
 		copy(cmdArgs, customArgs)
 
 		if attempt > 1 {
-			// On retry after rate-limit, auto-resume conversation if not already specified
-			hasContinue := false
-			hasConversation := false
-			for _, a := range cmdArgs {
-				if a == "--continue" || a == "-c" {
-					hasContinue = true
+			// On retry after rate-limit, prioritize resuming the EXACT conversation that hit the limit
+			mu.Lock()
+			currentID := activeConvID
+			mu.Unlock()
+
+			if currentID != "" {
+				var filtered []string
+				for i := 0; i < len(cmdArgs); i++ {
+					a := cmdArgs[i]
+					if a == "--continue" || a == "-c" {
+						continue
+					}
+					if strings.HasPrefix(a, "--conversation=") {
+						continue
+					}
+					if a == "--conversation" {
+						i++ // skip arg value
+						continue
+					}
+					filtered = append(filtered, a)
 				}
-				if a == "--conversation" || strings.HasPrefix(a, "--conversation=") {
-					hasConversation = true
+				cmdArgs = append(filtered, "--conversation="+currentID)
+			} else {
+				hasContinue := false
+				for _, a := range cmdArgs {
+					if a == "--continue" || a == "-c" {
+						hasContinue = true
+					}
 				}
-			}
-			if !hasContinue && !hasConversation {
-				cmdArgs = append([]string{"--continue"}, cmdArgs...)
+				if !hasContinue {
+					cmdArgs = append([]string{"--continue"}, cmdArgs...)
+				}
 			}
 		}
 
-		targetConvID := extractConversationID(cmdArgs)
+		mu.Lock()
+		targetConvID := activeConvID
+		mu.Unlock()
+
 		if targetConvID != "" {
 			if initTitle := getConversationTitle(targetConvID); initTitle != "" {
 				setTerminalTitle(initTitle)
@@ -166,7 +220,12 @@ func cmdRun(customArgs []string) {
 					return
 				case <-ticker.C:
 					mu.Lock()
-					cID := targetConvID
+					if activeConvID == "" {
+						if id := getLatestConversationID(); id != "" {
+							activeConvID = id
+						}
+					}
+					cID := activeConvID
 					mu.Unlock()
 
 					title := getConversationTitle(cID)
@@ -247,9 +306,9 @@ func cmdRun(customArgs []string) {
 
 				// Detect conversation UUID if not yet set
 				mu.Lock()
-				if targetConvID == "" {
-					if match := convUUIDRegex.FindString(line); match != "" {
-						targetConvID = match
+				if activeConvID == "" {
+					if m := convUUIDRegex.FindStringSubmatch(line); len(m) > 1 {
+						activeConvID = m[1]
 					}
 				}
 				mu.Unlock()
@@ -303,7 +362,10 @@ func cmdRun(customArgs []string) {
 		mu.Lock()
 		hitRateLimit := rateLimitDetected
 		aborted := userAborted
-		cID := targetConvID
+		if activeConvID == "" {
+			activeConvID = getLatestConversationID()
+		}
+		cID := activeConvID
 		mu.Unlock()
 
 		if aborted && !hitRateLimit {
