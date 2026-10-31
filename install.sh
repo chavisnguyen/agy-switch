@@ -80,6 +80,7 @@ INSTALL_DIRS=(
 INSTALLED_PATH=""
 for dir in "${INSTALL_DIRS[@]}"; do
     if [ -d "$dir" ] && [ -w "$dir" ]; then
+        rm -f "$dir/$BINARY_NAME"
         cp -f "$TARGET_FILE" "$dir/$BINARY_NAME"
         chmod +x "$dir/$BINARY_NAME"
         INSTALLED_PATH="$dir/$BINARY_NAME"
@@ -91,6 +92,7 @@ done
 if [ -z "$INSTALLED_PATH" ]; then
     USER_BIN="$HOME/.local/bin"
     mkdir -p "$USER_BIN"
+    rm -f "$USER_BIN/$BINARY_NAME"
     cp -f "$TARGET_FILE" "$USER_BIN/$BINARY_NAME"
     chmod +x "$USER_BIN/$BINARY_NAME"
     INSTALLED_PATH="$USER_BIN/$BINARY_NAME"
