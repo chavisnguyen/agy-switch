@@ -83,6 +83,9 @@ for dir in "${INSTALL_DIRS[@]}"; do
         rm -f "$dir/$BINARY_NAME"
         cp -f "$TARGET_FILE" "$dir/$BINARY_NAME"
         chmod +x "$dir/$BINARY_NAME"
+        if [ "$OS" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+            codesign -s - --force "$dir/$BINARY_NAME" 2>/dev/null || true
+        fi
         INSTALLED_PATH="$dir/$BINARY_NAME"
         break
     fi

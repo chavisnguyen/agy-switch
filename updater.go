@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -201,6 +202,10 @@ func cmdUpdate() {
 			fmt.Printf("   Please run with sudo: %s\n", colorize("sudo agys update", ColorCyan))
 			return
 		}
+	}
+
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("codesign", "-s", "-", "--force", exePath).Run()
 	}
 
 	// Update local cache
