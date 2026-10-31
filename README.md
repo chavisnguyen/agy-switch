@@ -67,6 +67,7 @@ agys update
 | `agys rename <old> <new>` | Rename an existing saved profile |
 | `agys remove <name>` | Delete a saved profile |
 | **`agys run [args...]`** | **Smart runner**: runs `agy` with auto-failover, resume hints & tab sync |
+| **`agys conv [dir]`** | **Interactive picker**: list conversations of current/target folder & resume |
 | **`agys watch start`** | **Background daemon**: monitors 429 errors and auto-switches tokens |
 | `agys watch stop` | Stop the background watcher daemon |
 | `agys watch status` | Check status and PID of the watcher daemon |

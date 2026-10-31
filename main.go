@@ -672,6 +672,7 @@ CORE COMMANDS:
 
 AUTO-SWITCH & FAILOVER:
   agys run [args...]           Smart wrapper: runs agy with auto-switch & --continue resume
+  agys conv [dir] [1-N] [-l]   List & pick conversations in folder to resume with auto-failover
   agys watch [start|stop|status]
                                Log watcher daemon: monitors 429/ResourceExhausted errors,
                                swaps tokens automatically and sends macOS notifications
@@ -732,6 +733,8 @@ func main() {
 		cmdWatch(args[1:])
 	case "run":
 		cmdRun(args[1:])
+	case "conv", "conversations", "chats":
+		cmdConversations(args[1:])
 	case "cooldown":
 		cmdCooldown(args[1:])
 	case "update", "upgrade":
