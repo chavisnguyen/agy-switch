@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -61,8 +62,22 @@ func handleRateLimitTrigger(sourceLine string) {
 				break
 			}
 		}
-		if currentProfile == "unknown" && activeInfo.Email != "" {
+		if (currentProfile == "unknown" || currentProfile == "") && activeInfo.Email != "" && activeInfo.Email != "Unknown email" {
 			currentProfile = activeInfo.Email
+		}
+	}
+	if currentProfile == "unknown" || currentProfile == "" || currentProfile == "Unknown email" {
+		if raw, err := os.ReadFile(tokenPath); err == nil {
+			var tf OAuthTokenFile
+			if json.Unmarshal(raw, &tf) == nil && tf.IDTokenEmail != "" {
+				currentProfile = tf.IDTokenEmail
+			}
+		}
+		if currentProfile == "unknown" || currentProfile == "" || currentProfile == "Unknown email" {
+			emailRegex := regexp.MustCompile(`email=([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})`)
+			if m := emailRegex.FindStringSubmatch(sourceLine); len(m) > 1 {
+				currentProfile = m[1]
+			}
 		}
 	}
 

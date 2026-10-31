@@ -103,7 +103,16 @@ func getLatestConversationID() string {
 	return strings.TrimSpace(string(out))
 }
 
+func resetTerminal() {
+	cmd := exec.Command("stty", "sane")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+}
+
 func printContinueHint(convID string) {
+	resetTerminal()
 	if convID == "" {
 		convID = getLatestConversationID()
 	}
@@ -111,9 +120,9 @@ func printContinueHint(convID string) {
 		return
 	}
 
-	fmt.Println()
+	fmt.Print("\r\n")
 	fmt.Println(colorize("To continue this conversation with auto-failover, run:", ColorBold))
-	fmt.Printf("  %s\n\n", colorize("agys run --conversation="+convID, ColorBold+ColorCyan))
+	fmt.Printf("  %s\r\n\r\n", colorize("agys run --conversation="+convID, ColorBold+ColorCyan))
 }
 
 func setTerminalTitle(title string) {
@@ -359,6 +368,9 @@ func cmdRun(customArgs []string) {
 		close(stopMonitor)
 		signal.Stop(sigChan)
 
+		// Always reset terminal immediately after agy exits/terminates
+		resetTerminal()
+
 		mu.Lock()
 		hitRateLimit := rateLimitDetected
 		aborted := userAborted
@@ -386,12 +398,13 @@ func cmdRun(customArgs []string) {
 		}
 
 		// Rate limit was detected during run
-		fmt.Println()
+		resetTerminal()
+		fmt.Print("\r\n")
 		fmt.Println(colorize("════════════════════════════════════════════════════════════", ColorYellow))
 		fmt.Println(colorize("⚡ Rate limit encountered during this turn!", ColorBold+ColorYellow))
 		fmt.Println(colorize("🔄 Automatically switching to the next account and resuming...", ColorBold+ColorGreen))
 		fmt.Println(colorize("════════════════════════════════════════════════════════════", ColorYellow))
-		fmt.Println()
+		fmt.Print("\r\n")
 		time.Sleep(1 * time.Second)
 	}
 
