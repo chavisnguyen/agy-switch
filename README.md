@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Go%201.22+-00ADD8?style=flat-square&logo=go" alt="Go" />
-  <img src="https://img.shields.io/badge/Platform-macOS-black?style=flat-square&logo=apple" alt="macOS" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-black?style=flat-square&logo=apple" alt="Platforms" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/Dependencies-Zero-blue?style=flat-square" alt="Zero Dependencies" />
 </p>
@@ -42,6 +42,13 @@ cd agy-switch
 make install
 ```
 This compiles the optimized native binary and installs `agys` globally into `/opt/homebrew/bin/agys` (or `~/.local/bin/agys`).
+
+### 🔄 Keeping `agys` Up to Date
+Upgrade to the newest release anytime with a single command:
+```bash
+agys update
+```
+*(You will also get a friendly notification when running `agys status` whenever a new release is available).*
 
 ---
 
@@ -167,14 +174,18 @@ To continue this conversation with auto-failover, run:
 
 ```text
 .
-├── main.go         # CLI router, list, and interactive commands
-├── profiles.go     # Profile storage, JWT decode, atomic swap & Keychain sync
-├── quota.go        # Parallel real-time quota inspection (Claude & Gemini)
-├── runner.go       # Smart wrapper: 429 auto-failover, tab title sync & hints
-├── watcher.go      # Log tailer, regex detector, background daemon & macOS alerts
-├── install.sh      # Build and symlink script
-├── Makefile        # make build, make install, make clean
-└── README.md       # Documentation
+├── .github/
+│   └── workflows/
+│       └── release.yml  # Automated cross-platform release builder
+├── main.go              # CLI router, list, and interactive commands
+├── profiles.go          # Profile storage, JWT decode, atomic swap & Keychain sync
+├── quota.go             # Parallel real-time quota inspection (Claude & Gemini)
+├── runner.go            # Smart wrapper: 429 auto-failover, tab title sync & hints
+├── updater.go           # Self-updater (agys update), version checker & release puller
+├── watcher.go           # Log tailer, regex detector, background daemon & macOS alerts
+├── install.sh           # 1-line curl installer & local installer
+├── Makefile             # make build, make install, make clean
+└── README.md            # Documentation
 ```
 
 ---
