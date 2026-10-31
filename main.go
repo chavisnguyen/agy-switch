@@ -68,17 +68,20 @@ func cmdList() {
 
 	fmt.Println()
 	fmt.Println(colorize("📋 AGY ACCOUNTS & PROFILES", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 70), ColorDim))
+	fmt.Println(colorize(strings.Repeat("═", 86), ColorDim))
 
 	if len(profiles) == 0 {
 		fmt.Println(colorize("No profiles saved yet.", ColorYellow))
-		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agy-switch save <name>", ColorGreen))
+		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agys save <name>", ColorGreen))
 		return
 	}
 
-	header := fmt.Sprintf("%-4s %-14s %-26s %-14s %s", "ID", "PROFILE", "EMAIL", "STATUS", "TOKEN")
+	// Fetch quotas in parallel with 3s timeout
+	quotas := fetchAllProfilesQuota(profiles, 3*time.Second)
+
+	header := fmt.Sprintf("%-4s %-12s %-26s %-12s %-12s %-12s", "ID", "PROFILE", "EMAIL", "CLAUDE", "GEMINI", "STATUS")
 	fmt.Println(header)
-	fmt.Println(colorize(strings.Repeat("─", 70), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 86), ColorDim))
 
 	anyActive := false
 	for idx, p := range profiles {
@@ -90,32 +93,32 @@ func cmdList() {
 			status = colorize("🟡 "+p.CooldownRemain, ColorYellow)
 		}
 
-		ver := colorize("🟢 "+p.StatusToken, ColorGreen)
-		if !p.IsValid {
-			ver = colorize("🔴 "+p.StatusToken, ColorRed)
-		}
-
 		pName := p.ProfileName
 		if p.IsActive {
 			pName = colorize(pName, ColorBold)
 		}
 
+		q := quotas[p.ProfileName]
+		claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
+		geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
+
 		sttStr := fmt.Sprintf("[%2d]", idx+1)
-		line := fmt.Sprintf("%s %s %s %s %s",
+		line := fmt.Sprintf("%s %s %s %s %s %s",
 			padRight(sttStr, 4),
-			padRight(pName, 14),
+			padRight(pName, 12),
 			padRight(p.Email, 26),
-			padRight(status, 14),
-			ver,
+			padRight(claudeBadge, 12),
+			padRight(geminiBadge, 12),
+			status,
 		)
 		fmt.Println(line)
 	}
 
-	fmt.Println(colorize(strings.Repeat("─", 70), ColorDim))
+	fmt.Println(colorize(strings.Repeat("─", 86), ColorDim))
 
 	if !anyActive && activeInfo != nil {
 		fmt.Println(colorize(fmt.Sprintf("⚠️  Active account (%s) is not saved to any profile.", activeInfo.Email), ColorYellow))
-		fmt.Printf("   Run: %s to save this profile.\n", colorize("agy-switch save <name>", ColorGreen))
+		fmt.Printf("   Run: %s to save this profile.\n", colorize("agys save <name>", ColorGreen))
 	}
 	fmt.Println()
 }
@@ -250,39 +253,56 @@ func cmdNext() {
 }
 
 func cmdCurrent() {
-	_, tokenPath, _, _, _, _, _ := getPaths()
-	info, err := readTokenInfo(tokenPath)
-	if err != nil {
-		fmt.Println(colorize("❌ No active account found on agy CLI.", ColorRed))
+	profiles, _ := getAllProfiles()
+	if len(profiles) == 0 {
+		fmt.Println()
+		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
+		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agys save <name>", ColorGreen))
 		return
 	}
 
-	profiles, _ := getAllProfiles()
-	matchedProfile := ""
-	for _, p := range profiles {
+	quotas := fetchAllProfilesQuota(profiles, 5*time.Second)
+
+	fmt.Println()
+	fmt.Println(colorize("📊 AGY ACCOUNTS STATUS & QUOTA", ColorBold+ColorCyan))
+	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
+
+	for idx, p := range profiles {
+		q := quotas[p.ProfileName]
+
+		badge := colorize("○ Ready", ColorDim)
 		if p.IsActive {
-			matchedProfile = p.ProfileName
-			break
+			badge = colorize("● ACTIVE", ColorBold+ColorGreen)
+		} else if p.IsCoolingDown {
+			badge = colorize("🟡 "+p.CooldownRemain+" cooldown", ColorYellow)
+		}
+
+		pTitle := fmt.Sprintf("[%d] %s", idx+1, p.ProfileName)
+		if p.IsActive {
+			pTitle = colorize(pTitle, ColorBold)
+		}
+
+		fmt.Printf("%s (%s)\n", pTitle, badge)
+		fmt.Printf("    Email  : %s\n", colorize(p.Email, ColorCyan))
+
+		claudeStr := formatQuotaBadge(q.ClaudeRemaining, q.Err)
+		if q.Err == nil && q.ClaudeResetTime != "" {
+			claudeStr += colorize(fmt.Sprintf(" (resets %s)", formatResetTime(q.ClaudeResetTime)), ColorDim)
+		}
+		fmt.Printf("    Claude : %s\n", claudeStr)
+
+		geminiStr := formatQuotaBadge(q.GeminiRemaining, q.Err)
+		if q.Err == nil && q.GeminiResetTime != "" {
+			geminiStr += colorize(fmt.Sprintf(" (resets %s)", formatResetTime(q.GeminiResetTime)), ColorDim)
+		}
+		fmt.Printf("    Gemini : %s\n", geminiStr)
+
+		if idx < len(profiles)-1 {
+			fmt.Println(colorize("    "+strings.Repeat("─", 50), ColorDim))
 		}
 	}
 
-	fmt.Println()
-	fmt.Println(colorize("👤 ACTIVE AGY ACCOUNT", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("─", 45), ColorDim))
-	if matchedProfile != "" {
-		fmt.Printf("Profile     : %s\n", colorize(matchedProfile, ColorBold+ColorGreen))
-	} else {
-		fmt.Printf("Profile     : %s\n", colorize("Unsaved profile", ColorYellow))
-	}
-	fmt.Printf("Email       : %s\n", colorize(info.Email, ColorBold+ColorCyan))
-	fmt.Printf("User Name   : %s\n", info.Name)
-
-	statusDisp := colorize("🟢 "+info.StatusToken, ColorGreen)
-	if !info.IsValid {
-		statusDisp = colorize("🔴 "+info.StatusToken, ColorRed)
-	}
-	fmt.Printf("Token Status: %s\n", statusDisp)
-	fmt.Printf("Path        : %s\n", tokenPath)
+	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
 	fmt.Println()
 }
 
@@ -486,7 +506,7 @@ func cmdRename(oldName, newName string) {
 	newName = sanitizeName(newName)
 
 	if oldName == "" || newName == "" {
-		fmt.Println(colorize("❌ Usage: agy-switch rename <old_name> <new_name>", ColorRed))
+		fmt.Println(colorize("❌ Usage: agys rename <old_name> <new_name>", ColorRed))
 		return
 	}
 
@@ -547,7 +567,7 @@ func cmdCooldown(args []string) {
 			rem := time.Until(time.Unix(exp, 0))
 			fmt.Printf("   - %s: %dm remaining\n", name, int(rem.Minutes()))
 		}
-		fmt.Println("\nTo clear: " + colorize("agy-switch cooldown clear", ColorCyan))
+		fmt.Println("\nTo clear: " + colorize("agys cooldown clear", ColorCyan))
 		return
 	}
 
@@ -567,60 +587,61 @@ func cmdInstall() {
 		return
 	}
 
-	targets := []string{
-		"/opt/homebrew/bin/agy-switch",
-		filepath.Join(os.Getenv("HOME"), ".local", "bin", "agy-switch"),
-		"/usr/local/bin/agy-switch",
+	dirs := []string{
+		"/opt/homebrew/bin",
+		filepath.Join(os.Getenv("HOME"), ".local", "bin"),
+		"/usr/local/bin",
 	}
 
 	installed := false
-	for _, target := range targets {
-		dir := filepath.Dir(target)
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			continue
 		}
 
-		_ = os.Remove(target)
-		if err := os.Symlink(execPath, target); err == nil {
-			fmt.Println(colorize(fmt.Sprintf("✅ Global shortcut installed at: %s", target), ColorBold+ColorGreen))
-			fmt.Printf("👉 You can now run '%s' from any terminal session.\n", colorize("agy-switch", ColorCyan))
+		targetAgys := filepath.Join(dir, "agys")
+		targetAgySwitch := filepath.Join(dir, "agy-switch")
+
+		_ = os.Remove(targetAgys)
+		_ = os.Remove(targetAgySwitch)
+
+		if err := os.Symlink(execPath, targetAgys); err == nil {
+			fmt.Println(colorize(fmt.Sprintf("✅ Global shortcut installed at: %s", targetAgys), ColorBold+ColorGreen))
+			fmt.Printf("👉 You can now run '%s' from any terminal session.\n", colorize("agys", ColorCyan))
 			installed = true
 			break
 		}
 	}
 
 	if !installed {
-		fmt.Println(colorize("⚠️  Could not create symlink in system bin directory. You can add this alias to ~/.zshrc:", ColorYellow))
-		fmt.Println(colorize(fmt.Sprintf(`echo "alias agy-switch='%s'" >> ~/.zshrc`, execPath), ColorCyan))
-		fmt.Println(colorize("source ~/.zshrc", ColorCyan))
+		fmt.Println(colorize("⚠️  Could not create symlink in system bin directory.", ColorYellow))
 	}
 }
 
 func printHelp() {
-	fmt.Println(`agy-switch (Golang): Fast & lightweight multi-account switcher for Google Antigravity CLI
+	fmt.Println(`agys (Golang): Fast & lightweight multi-account switcher for Google Antigravity CLI
 
 CORE COMMANDS:
-  agy-switch                         Interactive menu to choose and switch accounts
-  agy-switch <profile_name>          Instantly switch to the specified profile
-  agy-switch next                    Rotate to the next available profile (Round-Robin)
-  agy-switch list (ls)               List all saved profiles and token statuses
-  agy-switch save [name] (add)       Save current active session as a profile
-  agy-switch switch <name> (use)     Switch to specified profile
-  agy-switch current (whoami, status)Display active account details
-  agy-switch login [name]            Log in to a new Google account and save profile
-  agy-switch rename <old> <new> (mv) Rename a saved profile
-  agy-switch remove <name> (rm)      Delete a profile
-  agy-switch cooldown [clear|<name>] View or reset rate-limit cooldown status
+  agys                         Interactive menu to choose and switch accounts
+  agys <profile_name>          Instantly switch to the specified profile
+  agys next                    Rotate to the next available profile (Round-Robin)
+  agys list                    List all saved profiles with real-time quotas
+  agys status                  Display active account details and real-time quota
+  agys save [name]             Save current active session as a profile
+  agys login [name]            Log in to a new Google account and save profile
+  agys rename <old> <new>      Rename a saved profile
+  agys remove <name>           Delete a profile
+  agys cooldown [clear|<name>] View or reset rate-limit cooldown status
 
 AUTO-SWITCH & FAILOVER:
-  agy-switch run [args...]           Smart wrapper: runs agy with auto-switch & --continue resume
-  agy-switch watch [start|stop|status]
-                                     Log watcher daemon: monitors 429/ResourceExhausted errors,
-                                     swaps tokens automatically and sends macOS notifications
+  agys run [args...]           Smart wrapper: runs agy with auto-switch & --continue resume
+  agys watch [start|stop|status]
+                               Log watcher daemon: monitors 429/ResourceExhausted errors,
+                               swaps tokens automatically and sends macOS notifications
 
 UTILITY:
-  agy-switch install                 Create a global symlink in /opt/homebrew/bin
-  agy-switch help (-h, --help)       Show this help message`)
+  agys install                 Create a global symlink in /opt/homebrew/bin/agys
+  agys help                    Show this help message`)
 }
 
 func main() {
@@ -632,23 +653,23 @@ func main() {
 	}
 
 	switch args[0] {
-	case "list", "ls":
+	case "list":
 		cmdList()
-	case "save", "add":
+	case "save":
 		name := ""
 		if len(args) > 1 {
 			name = args[1]
 		}
 		cmdSave(name)
-	case "switch", "use":
+	case "switch":
 		if len(args) < 2 {
-			fmt.Println(colorize("❌ Please provide profile name: agy-switch switch <name>", ColorRed))
+			fmt.Println(colorize("❌ Please provide profile name: agys switch <name>", ColorRed))
 			return
 		}
 		cmdSwitch(args[1])
 	case "next":
 		cmdNext()
-	case "current", "whoami", "status":
+	case "status":
 		cmdCurrent()
 	case "login":
 		name := ""
@@ -656,15 +677,15 @@ func main() {
 			name = args[1]
 		}
 		cmdLoginNew(name)
-	case "rename", "mv":
+	case "rename":
 		if len(args) < 3 {
-			fmt.Println(colorize("❌ Please specify both old and new names: agy-switch rename <old> <new>", ColorRed))
+			fmt.Println(colorize("❌ Please specify both old and new names: agys rename <old> <new>", ColorRed))
 			return
 		}
 		cmdRename(args[1], args[2])
-	case "remove", "rm", "delete":
+	case "remove":
 		if len(args) < 2 {
-			fmt.Println(colorize("❌ Please provide profile name: agy-switch rm <name>", ColorRed))
+			fmt.Println(colorize("❌ Please provide profile name: agys remove <name>", ColorRed))
 			return
 		}
 		cmdRemove(args[1])
@@ -679,7 +700,7 @@ func main() {
 	case "help", "--help", "-h":
 		printHelp()
 	default:
-		// Shortcut syntax: `agy-switch <profile_name>`
+		// Shortcut syntax: `agys <profile_name>`
 		cmdSwitch(args[0])
 	}
 }

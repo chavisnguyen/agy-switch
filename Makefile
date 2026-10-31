@@ -3,16 +3,14 @@
 all: build
 
 build:
-	go build -ldflags="-s -w" -o agy-switch .
+	go build -ldflags="-s -w" -o agys .
 
 install:
 	./install.sh
 
 uninstall:
-	rm -f /opt/homebrew/bin/agy-switch ~/.local/bin/agy-switch /usr/local/bin/agy-switch
-	sed -i '' '/alias agy="agy-switch run"/d' ~/.zshrc 2>/dev/null || true
-	sed -i '' '/# agy-switch auto-failover wrapper/d' ~/.zshrc 2>/dev/null || true
-	@echo "Uninstalled agy-switch shortcut and alias."
+	rm -f /opt/homebrew/bin/agys /opt/homebrew/bin/agy-switch ~/.local/bin/agys ~/.local/bin/agy-switch /usr/local/bin/agys /usr/local/bin/agy-switch
+	@echo "Uninstalled agys and agy-switch shortcuts."
 
 clean:
-	rm -f agy-switch
+	rm -f agys agy-switch

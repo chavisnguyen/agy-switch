@@ -2,21 +2,115 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
+var convUUIDRegex = regexp.MustCompile(`[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`)
+
+func extractConversationID(args []string) string {
+	for _, a := range args {
+		if strings.HasPrefix(a, "--conversation=") {
+			return strings.TrimPrefix(a, "--conversation=")
+		}
+	}
+	for i, a := range args {
+		if a == "--conversation" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func getConversationTitle(convID string) string {
+	cliHome, _, _, _, _, _, _ := getPaths()
+	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return ""
+	}
+
+	var query string
+	if convID != "" {
+		cleanID := strings.ReplaceAll(convID, "'", "")
+		query = fmt.Sprintf("SELECT title FROM conversation_summaries WHERE conversation_id = '%s' AND title != '' LIMIT 1;", cleanID)
+	} else {
+		query = "SELECT title FROM conversation_summaries WHERE title != '' ORDER BY last_modified_time DESC LIMIT 1;"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, query)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func getLatestConversationID() string {
+	cliHome, _, _, _, _, _, _ := getPaths()
+	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func printContinueHint(convID string) {
+	if convID == "" {
+		convID = getLatestConversationID()
+	}
+	if convID == "" {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println(colorize("To continue this conversation with auto-failover, run:", ColorBold))
+	fmt.Printf("  %s\n\n", colorize("agys run --conversation="+convID, ColorBold+ColorCyan))
+}
+
+func setTerminalTitle(title string) {
+	if title == "" {
+		return
+	}
+
+	// 1. Standard ANSI OSC 2 escape sequence (supported by Ghostty, iTerm2, Kitty, Terminal.app)
+	fmt.Fprintf(os.Stdout, "\033]2;%s\007", title)
+
+	// 2. If running inside CMUX, also invoke cmux rename-tab for UI sync
+	if os.Getenv("CMUX_SOCKET_PATH") != "" || os.Getenv("CMUX_TAB_ID") != "" {
+		cmuxBin := os.Getenv("CMUX_BUNDLED_CLI_PATH")
+		if cmuxBin == "" {
+			cmuxBin = "cmux"
+		}
+		_ = exec.Command(cmuxBin, "rename-tab", title).Run()
+	}
+}
+
 // cmdRun runs agy as a child process and monitors for rate limit errors in real-time.
 // If a rate-limit occurs, it automatically switches profiles and auto-resumes the conversation.
 func cmdRun(customArgs []string) {
-	fmt.Println(colorize("🚀 agy-switch runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan))
+	fmt.Println(colorize("🚀 agys runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan))
 
 	maxRetries := 3
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -45,13 +139,44 @@ func cmdRun(customArgs []string) {
 			}
 		}
 
+		targetConvID := extractConversationID(cmdArgs)
+		if targetConvID != "" {
+			if initTitle := getConversationTitle(targetConvID); initTitle != "" {
+				setTerminalTitle(initTitle)
+			}
+		}
+
 		cmd := exec.Command("agy", cmdArgs...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 
-		// Channel to stop background log monitor
+		// Channel to stop background log & title monitors
 		stopMonitor := make(chan struct{})
+
+		// Start background title syncer to continuously sync tab title with conversation title
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			lastTitle := ""
+
+			for {
+				select {
+				case <-stopMonitor:
+					return
+				case <-ticker.C:
+					mu.Lock()
+					cID := targetConvID
+					mu.Unlock()
+
+					title := getConversationTitle(cID)
+					if title != "" && title != lastTitle {
+						lastTitle = title
+						setTerminalTitle(title)
+					}
+				}
+			}
+		}()
 
 		// Start background log monitor for this agy run
 		go func() {
@@ -120,6 +245,15 @@ func cmdRun(customArgs []string) {
 				line := partialLine.String()
 				partialLine.Reset()
 
+				// Detect conversation UUID if not yet set
+				mu.Lock()
+				if targetConvID == "" {
+					if match := convUUIDRegex.FindString(line); match != "" {
+						targetConvID = match
+					}
+				}
+				mu.Unlock()
+
 				if rateLimitRegex.MatchString(line) {
 					mu.Lock()
 					firstTrigger := !rateLimitDetected
@@ -169,15 +303,18 @@ func cmdRun(customArgs []string) {
 		mu.Lock()
 		hitRateLimit := rateLimitDetected
 		aborted := userAborted
+		cID := targetConvID
 		mu.Unlock()
 
 		if aborted && !hitRateLimit {
 			// User intentionally cancelled via Ctrl+C and no rate limit was hit
+			printContinueHint(cID)
 			return
 		}
 
 		if !hitRateLimit {
 			// Normal exit (no rate limit hit)
+			printContinueHint(cID)
 			if runErr != nil {
 				if exitErr, ok := runErr.(*exec.ExitError); ok {
 					os.Exit(exitErr.ExitCode())

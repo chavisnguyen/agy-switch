@@ -1,4 +1,4 @@
-# 🚀 agy-switch
+# 🚀 agys (agy-switch)
 
 > **A blazing-fast, lightweight, and secure multi-account manager with automatic rate-limit failover for Google Antigravity CLI (`agy`).**
 
@@ -6,39 +6,26 @@ Written in **Golang (Go Standard Library)** and compiled into a standalone nativ
 
 ---
 
-## 🌟 Key Features
-
-* ⚡ **Blazing Fast**: Native compiled Go binary running with near-zero latency and minimal resource footprint.
-* 🔄 **Automatic Rate-Limit Failover**:
-  * **Smart Wrapper (`agy-switch run`)**: Runs `agy` and automatically swaps accounts and resumes your conversation (`--continue`) when a 429 / Quota limit is hit.
-  * **Background Watcher (`agy-switch watch start`)**: Monitors `cli.log` in the background, automatically swaps tokens on quota exhaustion, and sends native **macOS notifications**.
-* ⏱️ **Cooldown / Penalty System**: Temporarily cools down rate-limited accounts (30 minutes) to prevent cyclic switching into exhausted profiles.
-* 🎯 **Round-Robin Rotation (`agy-switch next`)**: Instantly cycle to the next healthy account in your pool.
-* 🔍 **Automatic Account Detection**: Decodes OpenID Connect JWT tokens offline to display Google account email, name, and validity.
-* 🔒 **Strict Security (`0600`)**: Tokens are stored locally in `~/.gemini/antigravity-cli/profiles/` with strict `0600` permissions (user read/write only). 100% offline.
-
----
-
 ## 📖 Command Reference
 
-| Command | Alias | Description |
-| :--- | :--- | :--- |
-| `agy-switch` | | Open interactive selection menu |
-| `agy-switch <profile>` | `switch` | Instantly switch to `<profile>` |
-| `agy-switch next` | | Rotate to the next available account (Round-Robin) |
-| `agy-switch list` | `ls` | List all saved profiles, cooldowns, and token statuses |
-| `agy-switch current` | `whoami`, `status` | View currently active account details |
-| `agy-switch save [name]` | `add` | Save current active session as a named profile |
-| `agy-switch login [name]` | | Interactive wizard to log in to a new account and save profile |
-| `agy-switch rename <old> <new>` | `mv` | Rename an existing saved profile |
-| `agy-switch remove <name>` | `rm`, `delete` | Delete a saved profile |
-| **`agy-switch run [args...]`** | | **Smart wrapper**: runs `agy` with auto-switch & `--continue` resume |
-| **`agy-switch watch start`** | | **Start background daemon** to auto-switch on 429 & send macOS alerts |
-| `agy-switch watch stop` | | Stop the background watcher daemon |
-| `agy-switch watch status` | | Check status of the watcher daemon |
-| `agy-switch cooldown` | | View profiles currently in cooldown |
-| `agy-switch cooldown clear` | `reset` | Clear all cooldown penalties immediately |
-| `agy-switch install` | | Link binary globally to `/opt/homebrew/bin/agy-switch` |
+| Command | Description |
+| :--- | :--- |
+| `agys` | Open interactive selection menu |
+| `agys <profile>` | Instantly switch to `<profile>` |
+| `agys next` | Rotate to the next available account (Round-Robin) |
+| `agys list` | List all saved profiles with real-time Claude & Gemini quotas |
+| `agys status` | View currently active account details and real-time quota |
+| `agys save [name]` | Save current active session as a named profile |
+| `agys login [name]` | Interactive wizard to log in to a new account and save profile |
+| `agys rename <old> <new>` | Rename an existing saved profile |
+| `agys remove <name>` | Delete a saved profile |
+| **`agys run [args...]`** | **Smart wrapper**: runs `agy` with auto-switch & `--continue` resume |
+| **`agys watch start`** | **Start background daemon** to auto-switch on 429 & send macOS alerts |
+| `agys watch stop` | Stop the background watcher daemon |
+| `agys watch status` | Check status of the watcher daemon |
+| `agys cooldown` | View profiles currently in cooldown |
+| `agys cooldown clear` | Clear all cooldown penalties immediately |
+| `agys install` | Link binary globally to `/opt/homebrew/bin/agys` |
 
 ---
 
