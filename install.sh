@@ -106,14 +106,15 @@ echo -e "${GREEN}🎉 ${BINARY_NAME} installed successfully!${RESET}"
 echo -e "   Location: ${CYAN}${INSTALLED_PATH}${RESET}"
 
 # Verify if installed dir is in PATH
+INSTALLED_DIR="$(dirname "$INSTALLED_PATH")"
 case ":$PATH:" in
-    *":$(dirname "$INSTALLED_PATH"):*")
+    *":$INSTALLED_DIR:"*)
         ;;
     *)
         echo ""
-        echo -e "${YELLOW}⚠️  Note: $(dirname "$INSTALLED_PATH") is not in your \$PATH.${RESET}"
+        echo -e "${YELLOW}⚠️  Note: $INSTALLED_DIR is not in your \$PATH.${RESET}"
         echo -e "   Add this line to your ~/.zshrc or ~/.bashrc:"
-        echo -e "   ${CYAN}export PATH=\"$(dirname "$INSTALLED_PATH"):\$PATH\"${RESET}"
+        echo -e "   ${CYAN}export PATH=\"$INSTALLED_DIR:\$PATH\"${RESET}"
         ;;
 esac
 
