@@ -64,6 +64,8 @@ This compiles the optimized native binary and installs `agys` globally into `/op
 | `agys watch status` | Check status and PID of the watcher daemon |
 | `agys cooldown` | View profiles currently in cooldown penalty |
 | `agys cooldown clear` | Clear all cooldown penalties immediately |
+| **`agys update`** | **Self-update**: automatically downloads and updates `agys` to latest release |
+| `agys version` | Show current installed version & architecture |
 | `agys help` | Display built-in help |
 
 ---

@@ -314,7 +314,7 @@ func getAllProfiles() ([]ProfileInfo, error) {
 	now := time.Now().Unix()
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == ".cooldown.json" {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 

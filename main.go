@@ -304,6 +304,7 @@ func cmdCurrent() {
 
 	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
 	fmt.Println()
+	CheckUpdateNotice()
 }
 
 func cmdInteractive() {
@@ -640,6 +641,8 @@ AUTO-SWITCH & FAILOVER:
                                swaps tokens automatically and sends macOS notifications
 
 UTILITY:
+  agys update                  Update agys to the latest GitHub release
+  agys version                 Show current version
   agys install                 Create a global symlink in /opt/homebrew/bin/agys
   agys help                    Show this help message`)
 }
@@ -695,6 +698,10 @@ func main() {
 		cmdRun(args[1:])
 	case "cooldown":
 		cmdCooldown(args[1:])
+	case "update", "upgrade":
+		cmdUpdate()
+	case "version", "--version", "-v":
+		cmdVersion()
 	case "install":
 		cmdInstall()
 	case "help", "--help", "-h":
