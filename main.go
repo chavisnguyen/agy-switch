@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -165,6 +166,23 @@ func cmdSave(name string) {
 			fmt.Println("Cancelled.")
 			return
 		}
+	}
+
+	// Verify account status with Google before saving
+	fmt.Print(colorize("🔍 Verifying account status with Google...", ColorDim))
+	ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCheck()
+	q := fetchProfileQuota(ctxCheck, tokenPath)
+	if q.Err != nil && strings.Contains(q.Err.Error(), "Verify your account") {
+		fmt.Println()
+		fmt.Println(colorize("❌ Cannot save profile: Account requires security verification by Google (\"Verify your account\").", ColorBold+ColorRed))
+		fmt.Println(colorize("   Please open your browser, complete Google's verification checkpoint, and try again.", ColorYellow))
+		return
+	}
+	if q.Err == nil {
+		fmt.Println(colorize(" ✓ Account healthy", ColorGreen))
+	} else {
+		fmt.Printf(colorize(" (Notice: %v)\n", ColorYellow), q.Err)
 	}
 
 	if err := copyFile(tokenPath, targetPath, 0600); err != nil {
@@ -451,6 +469,24 @@ func cmdLoginNew(name string) {
 				_ = os.WriteFile(tokenPath, data, 0600)
 				email = emailFromKeyring
 			}
+		}
+
+		// Verify account status with Google before finalizing profile
+		fmt.Print(colorize("🔍 Verifying account status with Google...", ColorDim))
+		ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelCheck()
+		q := fetchProfileQuota(ctxCheck, targetPath)
+		if q.Err != nil && strings.Contains(q.Err.Error(), "Verify your account") {
+			fmt.Println()
+			fmt.Println(colorize("❌ Account rejected: Google requires security verification (\"Verify your account\").", ColorBold+ColorRed))
+			fmt.Println(colorize("   Please open your browser, complete Google's verification checkpoint, and try again.", ColorYellow))
+			_ = os.Remove(targetPath)
+			return
+		}
+		if q.Err == nil {
+			fmt.Println(colorize(" ✓ Account healthy", ColorGreen))
+		} else {
+			fmt.Printf(colorize(" (Notice: %v)\n", ColorYellow), q.Err)
 		}
 
 		_ = os.WriteFile(currentFile, []byte(name), 0600)
