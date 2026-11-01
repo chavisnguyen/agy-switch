@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,30 @@ const (
 	modelsEndpoint = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
 	userAgent      = "antigravity/1.0.0 darwin/arm64"
 )
+
+var quotaHTTPClient = &http.Client{
+	Timeout: 6 * time.Second,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{
+				Timeout:   3 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}
+			// Prefer IPv4 first to avoid hanging on broken IPv6 routes
+			if conn, err := dialer.DialContext(ctx, "tcp4", addr); err == nil {
+				return conn, nil
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          20,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       60 * time.Second,
+		TLSHandshakeTimeout:   3 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	},
+}
 
 func getOAuthCreds() (string, string) {
 	xorKey := byte(0x5A)
@@ -79,8 +104,7 @@ func getFreshAccessToken(ctx context.Context, refreshToken, fallbackAccessToken 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := quotaHTTPClient.Do(req)
 	if err != nil {
 		if fallbackAccessToken != "" {
 			return fallbackAccessToken, nil
@@ -142,8 +166,7 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := quotaHTTPClient.Do(req)
 	if err != nil {
 		return ProfileQuota{Err: err}
 	}
@@ -157,7 +180,7 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 				req2.Header.Set("Authorization", "Bearer "+freshToken)
 				req2.Header.Set("Content-Type", "application/json")
 				req2.Header.Set("User-Agent", userAgent)
-				if resp2, err3 := client.Do(req2); err3 == nil {
+				if resp2, err3 := quotaHTTPClient.Do(req2); err3 == nil {
 					defer resp2.Body.Close()
 					resp = resp2
 				}
