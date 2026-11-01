@@ -63,70 +63,7 @@ func padRight(s string, width int) string {
 // ==================== CLI COMMANDS ====================
 
 func cmdList() {
-	_, tokenPath, _, _, _, _, _ := getPaths()
-	profiles, _ := getAllProfiles()
-	activeInfo, _ := readTokenInfo(tokenPath)
-
-	fmt.Println()
-	fmt.Println(colorize("📋 AGY ACCOUNTS & PROFILES", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 86), ColorDim))
-
-	if len(profiles) == 0 {
-		fmt.Println(colorize("No profiles saved yet.", ColorYellow))
-		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agys save <name>", ColorGreen))
-		return
-	}
-
-	// Fetch quotas in parallel with 3s timeout
-	quotas := fetchAllProfilesQuota(profiles, 3*time.Second)
-
-	header := fmt.Sprintf("%-4s %-12s %-26s %-12s %-12s %-12s", "ID", "PROFILE", "EMAIL", "CLAUDE", "GEMINI", "STATUS")
-	fmt.Println(header)
-	fmt.Println(colorize(strings.Repeat("─", 86), ColorDim))
-
-	anyActive := false
-	for idx, p := range profiles {
-		q := quotas[p.ProfileName]
-
-		status := colorize("○ Ready", ColorDim)
-		if p.IsActive {
-			status = colorize("● ACTIVE", ColorBold+ColorGreen)
-			anyActive = true
-		} else if p.IsCoolingDown {
-			status = colorize("🟡 "+p.CooldownRemain, ColorYellow)
-		} else if q.Err == nil && q.ClaudeRemaining < 0.05 && q.ClaudeResetTime != "" {
-			if t, err := time.Parse(time.RFC3339, q.ClaudeResetTime); err == nil && time.Until(t) > 5*time.Hour+15*time.Minute {
-				status = colorize("🔴 Weekly Cap", ColorRed)
-			}
-		}
-
-		pName := p.ProfileName
-		if p.IsActive {
-			pName = colorize(pName, ColorBold)
-		}
-
-		claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
-		geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
-
-		sttStr := fmt.Sprintf("[%2d]", idx+1)
-		line := fmt.Sprintf("%s %s %s %s %s %s",
-			padRight(sttStr, 4),
-			padRight(pName, 12),
-			padRight(p.Email, 26),
-			padRight(claudeBadge, 12),
-			padRight(geminiBadge, 12),
-			status,
-		)
-		fmt.Println(line)
-	}
-
-	fmt.Println(colorize(strings.Repeat("─", 86), ColorDim))
-
-	if !anyActive && activeInfo != nil {
-		fmt.Println(colorize(fmt.Sprintf("⚠️  Active account (%s) is not saved to any profile.", activeInfo.Email), ColorYellow))
-		fmt.Printf("   Run: %s to save this profile.\n", colorize("agys save <name>", ColorGreen))
-	}
-	fmt.Println()
+	cmdCurrent()
 }
 
 func cmdSave(name string) {
@@ -759,32 +696,27 @@ func cmdInstall() {
 }
 
 func printHelp() {
-	fmt.Println(`agys (Golang): Fast & lightweight multi-account switcher for Google Antigravity CLI
+	fmt.Println(`agys - Fast & lightweight multi-account manager & auto-failover runner for Google Antigravity CLI
 
-CORE COMMANDS:
+RUN & CODE:
+  agys run [args...]           Run agy with auto-switch & context resume on rate limits (429)
+  agys conv [dir]              Interactive picker (↑/↓) to select & resume conversations
+
+ACCOUNTS & QUOTAS:
+  agys status                  View all accounts, real-time quotas, 5h cycles & Weekly Caps (alias: agys ls)
+  agys <profile>               Instantly switch to the specified profile
+  agys next                    Auto-switch to the optimal account (smart burn & balance)
   agys                         Interactive menu to choose and switch accounts
-  agys <profile_name>          Instantly switch to the specified profile
-  agys next                    Rotate to the next available profile (Round-Robin)
-  agys burn                    Smart optimizer: switch to account expiring soonest to burn quota
-  agys list                    List all saved profiles with real-time quotas
-  agys status                  Display active account details, 5h vs Weekly reset times
-  agys save [name]             Save current active session as a profile
+
+MANAGEMENT:
   agys login [name]            Log in to a new Google account and save profile
+  agys save [name]             Save current active session as a profile
   agys rename <old> <new>      Rename a saved profile
   agys remove <name>           Delete a profile
-  agys cooldown [clear|<name>] View or reset rate-limit cooldown status
-
-AUTO-SWITCH & FAILOVER:
-  agys run [args...]           Smart wrapper: runs agy with auto-switch & --continue resume
-  agys conv [dir] [1-N] [-l]   List & pick conversations in folder to resume with auto-failover
-  agys watch [start|stop|status]
-                               Log watcher daemon: monitors 429/ResourceExhausted errors,
-                               swaps tokens automatically and sends macOS notifications
 
 UTILITY:
   agys update                  Update agys to the latest GitHub release
-  agys version                 Show current version
-  agys install                 Create a global symlink in /opt/homebrew/bin/agys
+  agys version                 Show current installed version
   agys help                    Show this help message`)
 }
 
@@ -797,32 +729,32 @@ func main() {
 	}
 
 	switch args[0] {
-	case "list":
-		cmdList()
-	case "save":
-		name := ""
-		if len(args) > 1 {
-			name = args[1]
-		}
-		cmdSave(name)
+	case "status", "ls", "list":
+		cmdCurrent()
+	case "next", "burn":
+		cmdNext()
+	case "run":
+		cmdRun(args[1:])
+	case "conv", "conversations", "chats":
+		cmdConversations(args[1:])
 	case "switch":
 		if len(args) < 2 {
 			fmt.Println(colorize("❌ Please provide profile name: agys switch <name>", ColorRed))
 			return
 		}
 		cmdSwitch(args[1])
-	case "next":
-		cmdNext()
-	case "burn":
-		cmdBurn()
-	case "status":
-		cmdCurrent()
 	case "login":
 		name := ""
 		if len(args) > 1 {
 			name = args[1]
 		}
 		cmdLoginNew(name)
+	case "save":
+		name := ""
+		if len(args) > 1 {
+			name = args[1]
+		}
+		cmdSave(name)
 	case "rename":
 		if len(args) < 3 {
 			fmt.Println(colorize("❌ Please specify both old and new names: agys rename <old> <new>", ColorRed))
@@ -835,20 +767,16 @@ func main() {
 			return
 		}
 		cmdRemove(args[1])
-	case "watch":
-		cmdWatch(args[1:])
-	case "run":
-		cmdRun(args[1:])
-	case "conv", "conversations", "chats":
-		cmdConversations(args[1:])
-	case "cooldown":
-		cmdCooldown(args[1:])
 	case "update", "upgrade":
 		cmdUpdate()
 	case "version", "--version", "-v":
 		cmdVersion()
 	case "install":
 		cmdInstall()
+	case "cooldown":
+		cmdCooldown(args[1:])
+	case "watch":
+		cmdWatch(args[1:])
 	case "help", "--help", "-h":
 		printHelp()
 	default:

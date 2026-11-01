@@ -55,28 +55,34 @@ agys update
 
 ## 📖 Command Reference
 
+### 🚀 Run & Code
 | Command | Description |
 | :--- | :--- |
-| `agys` | Interactive numbered menu to select and switch accounts |
-| `agys <profile>` | Instantly switch to `<profile>` |
-| `agys next` | Rotate to the next available healthy profile (Round-Robin) |
-| **`agys burn`** | **Smart optimizer**: switch to account expiring soonest to burn quota before reset |
-| `agys status` | View active account details and real-time Claude/Gemini quotas |
-| `agys list` | Formatted table of all saved profiles and quota percentages |
+| **`agys run [args...]`** | Smart runner: runs `agy` with auto-failover & context resume on rate limits |
+| **`agys conv [dir]`** | Interactive picker (`↑`/`↓`): select & resume conversations in current or target folder |
+
+### 📊 Accounts & Quotas
+| Command | Description |
+| :--- | :--- |
+| **`agys status`** (or `ls`) | Unified view of all accounts, real-time quotas, 5h cycles & Weekly Cap status |
+| **`agys next`** | Auto-switch to the optimal account (smart burn expiring tokens + load balancing) |
+| **`agys <profile>`** | Instantly switch to the specified profile |
+| **`agys`** | Interactive numbered menu to select and switch accounts |
+
+### ⚙️ Profile Management
+| Command | Description |
+| :--- | :--- |
+| `agys login [name]` | Authenticate a new Google account in browser and save profile |
 | `agys save [name]` | Save current active session as a named profile |
-| `agys login [name]` | Interactive wizard to authenticate a new Google account |
 | `agys rename <old> <new>` | Rename an existing saved profile |
 | `agys remove <name>` | Delete a saved profile |
-| **`agys run [args...]`** | **Smart runner**: runs `agy` with auto-failover, resume hints & tab sync |
-| **`agys conv [dir]`** | **Interactive picker**: list conversations of current/target folder & resume |
-| **`agys watch start`** | **Background daemon**: monitors 429 errors and auto-switches tokens |
-| `agys watch stop` | Stop the background watcher daemon |
-| `agys watch status` | Check status and PID of the watcher daemon |
-| `agys cooldown` | View profiles currently in cooldown penalty |
-| `agys cooldown clear` | Clear all cooldown penalties immediately |
-| **`agys update`** | **Self-update**: automatically downloads and updates `agys` to latest release |
+
+### 🛠️ Utility
+| Command | Description |
+| :--- | :--- |
+| `agys update` | Automatically update `agys` to the latest GitHub release |
 | `agys version` | Show current installed version & architecture |
-| `agys help` | Display built-in help |
+| `agys help` | Display built-in help message |
 
 ---
 
@@ -125,54 +131,29 @@ Output preview:
 
 ### 4. Switch Accounts On The Fly
 ```bash
-# Switch directly
+# Switch directly to an account
 agys main
 
-# Or optimize quota before expiration
-agys burn
-
-# Or rotate to next healthy account
+# Or rotate to next optimal account (smart burn & load balanced)
 agys next
 
-# Or open interactive menu
+# Or open interactive menu to pick by number
 agys
 ```
 
 ---
 
-## 🔥 Smart Burn Optimizer (`agys burn`)
+## 🧠 Smart Quota Optimization (Built into `agys next` & `agys run`)
 
 Google Antigravity quotas operate on a **"Use-It-Or-Lose-It"** model. If an account has 70% quota remaining with 30 minutes until reset, that quota evaporates if unused. 
 
-Running `agys burn` scans real-time quotas across all accounts and selects the optimal profile:
+Whenever you run **`agys next`** or whenever **`agys run`** encounters a 429 rate limit, it automatically inspects quotas in real-time and picks the optimal account:
 
-```bash
-agys burn
-```
-
-```text
-🔥 AGYS SMART BURN: 5H VS WEEKLY CAP OPTIMIZER
-════════════════════════════════════════════════════════════════════════════════════════
-Scanning real-time quotas, 5h burst windows, and 7-day Weekly Caps...
-
-ID   PROFILE        CLAUDE         GEMINI         CYCLE              RECOMMENDATION    
-────────────────────────────────────────────────────────────────────────────────────────
-[ 1] 1craft         🟢 100.0%       🟢 100.0%       [5h Cycle]         ○ Eligible
-[ 2] chavisngn      🟢 100.0%       🟢  79.8%       [5h Cycle]         ● ACTIVE
-[ 3] mailecmcglobal 🟢 100.0%       🟢  95.8%       [5h Cycle]         ○ Eligible
-[ 4] main           🔴   0.0%       🟢 100.0%       [Weekly Cap ⚠️]    ⚠️ Claude locked (Gemini only)
-[ 5] ngocdung       🔴   0.0%       🔴   0.0%       [Weekly Cap ⚠️]    ❌ Weekly Cap locked (0% quota)
-────────────────────────────────────────────────────────────────────────────────────────
-
-✅ Active account 'chavisngn' is ALREADY the optimal burn candidate!
-   Reason: Claude 100.0% in [5h] cycle (resets in 4h59m) - optimal balance
-```
-
-### How Smart Burn Works:
-1. **Urgent Burn**: If an account is expiring in `< 90m` with `>= 10%` quota, it flags as `🔥 URGENT BURN` and switches to it so no tokens are wasted.
-2. **Weekly Cap Protection**: Accounts with `0.0%` quota and multi-day reset locks (`[Weekly Cap ⚠️]`) are strictly skipped.
+### How Smart Selection Works:
+1. **Urgent Burn**: If an account is expiring in `< 90m` with `>= 10%` quota, it prioritizes switching to it so no tokens are wasted before the reset window closes.
+2. **Weekly Cap Protection**: Accounts with `0.0%` quota and multi-day reset locks (`[Weekly Cap ⚠️]`) are strictly skipped — no more blind switches into dead accounts!
 3. **Balanced Load**: When accounts have ample time, it balances usage across 5h accounts so no single account prematurely triggers the 7-day weekly cap.
-4. **Auto-Failover Integration**: When `agys run` hits an HTTP 429 error, it automatically invokes this algorithm to pick the healthiest replacement account.
+4. **Zero Configuration**: This intelligence runs automatically in `agys next` and `agys run` without requiring any extra flags. (You can also run `agys burn` as an alias).
 
 ---
 
