@@ -150,16 +150,29 @@ func getSttyState() string {
 	return strings.TrimSpace(string(out))
 }
 
-func restoreSttyState(state string) {
-	if state != "" {
-		cmd := exec.Command("stty", state)
-		cmd.Stdin = os.Stdin
-		_ = cmd.Run()
-	} else {
-		cmd := exec.Command("stty", "sane")
-		cmd.Stdin = os.Stdin
-		_ = cmd.Run()
+func setRawMode() error {
+	cmd := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	if err := cmd.Run(); err == nil {
+		return nil
 	}
+	cmdFallback := exec.Command("stty", "cbreak", "-echo")
+	cmdFallback.Stdin = os.Stdin
+	cmdFallback.Stdout = os.Stdout
+	return cmdFallback.Run()
+}
+
+func restoreSttyState(state string) {
+	var cmd *exec.Cmd
+	if state != "" {
+		cmd = exec.Command("stty", state)
+	} else {
+		cmd = exec.Command("stty", "sane")
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	_ = cmd.Run()
 }
 
 func isTerminalStdin() bool {
@@ -186,6 +199,10 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 	}
 
 	savedState := getSttyState()
+	if err := setRawMode(); err != nil {
+		return -2 // Raw mode failed, fallback to standard prompt
+	}
+
 	defer func() {
 		restoreSttyState(savedState)
 		fmt.Print("\033[?25h") // Show cursor
@@ -202,8 +219,6 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 		os.Exit(1)
 	}()
 
-	// Raw mode: non-canonical, no echo, min 1 byte, 100ms timeout
-	_ = exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1").Run()
 	fmt.Print("\033[?25l") // Hide cursor
 
 	totalLines := len(convs) + 7
@@ -286,7 +301,7 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 
 	render(true)
 
-	buf := make([]byte, 16)
+	buf := make([]byte, 32)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
@@ -304,14 +319,14 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 				return -1
 			case 10, 13, ' ': // Enter, Space
 				return selectedIdx
-			case 'k', 'K': // vim up
+			case 16, 'k', 'K': // Ctrl+P, vim up
 				if selectedIdx > 0 {
 					selectedIdx--
 				} else {
 					selectedIdx = len(convs) - 1
 				}
 				render(false)
-			case 'j', 'J': // vim down
+			case 14, 'j', 'J': // Ctrl+N, vim down
 				if selectedIdx < len(convs)-1 {
 					selectedIdx++
 				} else {
@@ -335,10 +350,10 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 			continue
 		}
 
-		// Multi-byte sequence (arrow keys, home, end)
-		if buf[0] == 27 {
-			if n >= 3 && (buf[1] == '[' || buf[1] == 'O') {
-				switch buf[2] {
+		// Multi-byte sequence (arrow keys, home, end, page up/down)
+		for i := 0; i < n; i++ {
+			if buf[i] == 27 && i+2 < n && (buf[i+1] == '[' || buf[i+1] == 'O') {
+				switch buf[i+2] {
 				case 'A': // Up
 					if selectedIdx > 0 {
 						selectedIdx--
@@ -346,6 +361,7 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 						selectedIdx = len(convs) - 1
 					}
 					render(false)
+					i += 2
 				case 'B': // Down
 					if selectedIdx < len(convs)-1 {
 						selectedIdx++
@@ -353,12 +369,37 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 						selectedIdx = 0
 					}
 					render(false)
+					i += 2
 				case 'H': // Home
 					selectedIdx = 0
 					render(false)
+					i += 2
 				case 'F': // End
 					selectedIdx = len(convs) - 1
 					render(false)
+					i += 2
+				case '5': // Page Up
+					selectedIdx -= 5
+					if selectedIdx < 0 {
+						selectedIdx = 0
+					}
+					render(false)
+					if i+3 < n && buf[i+3] == '~' {
+						i += 3
+					} else {
+						i += 2
+					}
+				case '6': // Page Down
+					selectedIdx += 5
+					if selectedIdx >= len(convs) {
+						selectedIdx = len(convs) - 1
+					}
+					render(false)
+					if i+3 < n && buf[i+3] == '~' {
+						i += 3
+					} else {
+						i += 2
+					}
 				}
 			}
 		}
@@ -491,14 +532,17 @@ func cmdConversations(args []string) {
 	// 3. Interactive arrow navigation if terminal
 	if isTerminalStdin() {
 		choiceIdx := selectConversationInteractive(convs, activeID, isAll, targetDir)
-		if choiceIdx < 0 {
+		if choiceIdx == -1 {
 			fmt.Println(colorize("Cancelled.", ColorYellow))
 			return
 		}
-		selected := convs[choiceIdx]
-		fmt.Println(colorize(fmt.Sprintf("🚀 Resuming [%d]: %s", choiceIdx+1, selected.Title), ColorBold+ColorGreen))
-		cmdRun([]string{"--conversation=" + selected.ConversationID})
-		return
+		if choiceIdx >= 0 {
+			selected := convs[choiceIdx]
+			fmt.Println(colorize(fmt.Sprintf("🚀 Resuming [%d]: %s", choiceIdx+1, selected.Title), ColorBold+ColorGreen))
+			cmdRun([]string{"--conversation=" + selected.ConversationID})
+			return
+		}
+		// If choiceIdx == -2 (raw mode failed), fall through to plain text prompt
 	}
 
 	// 4. Fallback for non-TTY / pipe: plain text prompt
