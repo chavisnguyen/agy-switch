@@ -109,7 +109,7 @@ func getFolderConversations(targetDir string, isAll bool, limit int) ([]Conversa
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sqlite3", "-json", dbPath, query)
+	cmd := exec.CommandContext(ctx, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-json", dbPath, query)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, activeID, fmt.Errorf("sqlite3 query failed: %w", err)

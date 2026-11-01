@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,7 +18,34 @@ import (
 
 var rateLimitRegex = regexp.MustCompile(`(?i)(agent executor error.*(RESOURCE_EXHAUSTED|\b429\b)|streamGenerateContent.*(RESOURCE_EXHAUSTED|\b429\b)|RESOURCE_EXHAUSTED.*(code 429)|Individual quota reached|quota exceeded|exceeded your current quota|exceeded max quota|rate limit reached|rate limit exceeded|Verify your account to continue)`)
 
+func isRateLimitError(line string) bool {
+	// 1. Skip user input echoes, prompt logging, message forwarding, and internal metadata
+	if strings.Contains(line, "HandleUserInput") ||
+		strings.Contains(line, "input_loop.go") ||
+		strings.Contains(line, "Forwarding user message") ||
+		strings.Contains(line, "Sending user message") ||
+		strings.Contains(line, "SEND_USER_CASCADE_MESSAGE") ||
+		strings.Contains(line, "reconcile_summaries.go") ||
+		strings.Contains(line, "store_client.go") {
+		return false
+	}
+
+	// 2. Must be an actual error or warning from backend / agent executor / auth
+	if !strings.HasPrefix(line, "E") && !strings.HasPrefix(line, "W") &&
+		!strings.Contains(line, "errorreport.go") &&
+		!strings.Contains(line, "agent executor error") &&
+		!strings.Contains(line, "server_oauth.go") {
+		return false
+	}
+
+	// 3. Match rate limit regex
+	return rateLimitRegex.MatchString(line)
+}
+
 func sendMacOSNotification(title, message string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
 	script := fmt.Sprintf(`display notification "%s" with title "%s" sound name "Submarine"`,
 		strings.ReplaceAll(message, `"`, `\"`),
 		strings.ReplaceAll(title, `"`, `\"`),
@@ -39,17 +67,6 @@ func getActiveLogFilePath() string {
 
 func handleRateLimitTrigger(sourceLine string) {
 	_, tokenPath, profilesDir, _, _, _, _ := getPaths()
-
-	// Cross-process debounce (prevents double-switching if both runner and daemon are active)
-	lastSwitchFile := filepath.Join(profilesDir, ".last_switch")
-	if data, err := os.ReadFile(lastSwitchFile); err == nil {
-		if ts, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
-			if time.Now().Unix()-ts < 4 {
-				return
-			}
-		}
-	}
-	_ = os.WriteFile(lastSwitchFile, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0600)
 
 	activeInfo, _ := readTokenInfo(tokenPath)
 
@@ -81,6 +98,26 @@ func handleRateLimitTrigger(sourceLine string) {
 		}
 	}
 
+	// Cross-process debounce: prevent duplicate triggers for the SAME profile within 3 seconds
+	lastSwitchFile := filepath.Join(profilesDir, ".last_switch")
+	if data, err := os.ReadFile(lastSwitchFile); err == nil {
+		content := strings.TrimSpace(string(data))
+		parts := strings.Split(content, ":")
+		if len(parts) == 2 {
+			lastProf := parts[0]
+			if ts, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				if lastProf == currentProfile && time.Now().Unix()-ts < 3 {
+					return
+				}
+			}
+		} else if ts, err := strconv.ParseInt(content, 10, 64); err == nil {
+			if time.Now().Unix()-ts < 3 {
+				return
+			}
+		}
+	}
+	_ = os.WriteFile(lastSwitchFile, []byte(fmt.Sprintf("%s:%d", currentProfile, time.Now().Unix())), 0600)
+
 	// 1. Mark current profile in cooldown for 30 minutes
 	if currentProfile != "unknown" {
 		setProfileCooldown(currentProfile, 30*time.Minute)
@@ -90,15 +127,15 @@ func handleRateLimitTrigger(sourceLine string) {
 	nextName, err := switchNextProfile("Rate limit detected")
 	if err != nil {
 		alertMsg := fmt.Sprintf("Quota limit reached on '%s', but could not switch: %v", currentProfile, err)
-		fmt.Println(colorize("❌ "+alertMsg, ColorBold+ColorRed))
+		fmt.Print(colorize("❌ "+alertMsg, ColorBold+ColorRed) + "\r\n")
 		sendMacOSNotification("agy-switch: Quota Limit", alertMsg)
 		return
 	}
 
 	successMsg := fmt.Sprintf("Quota limit on '%s'. Auto-switched to '%s'!", currentProfile, nextName)
-	fmt.Println()
-	fmt.Println(colorize("⚡ "+successMsg, ColorBold+ColorGreen))
-	fmt.Printf("   Reason log: %s\n", colorize(strings.TrimSpace(sourceLine), ColorDim))
+	fmt.Print("\r\n")
+	fmt.Print(colorize("⚡ "+successMsg, ColorBold+ColorGreen) + "\r\n")
+	fmt.Printf("   Reason log: %s\r\n", colorize(strings.TrimSpace(sourceLine), ColorDim))
 
 	// 3. Send macOS Notification
 	sendMacOSNotification("agy-switch: Quota Auto-Switch", successMsg)
@@ -170,10 +207,10 @@ func watchLoop(stopChan <-chan struct{}) {
 		line := partialLine.String()
 		partialLine.Reset()
 
-		// Check if line matches rate limit error
-		if rateLimitRegex.MatchString(line) {
-			// Debounce: prevent duplicate triggers within 5 seconds
-			if time.Since(lastTrigger) > 5*time.Second {
+		// Check if line matches authentic rate limit error
+		if isRateLimitError(line) {
+			// Debounce: prevent duplicate triggers within 3 seconds
+			if time.Since(lastTrigger) > 3*time.Second {
 				lastTrigger = time.Now()
 				handleRateLimitTrigger(line)
 			}
@@ -225,7 +262,7 @@ func cmdWatch(args []string) {
 		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0600)
 		fmt.Println(colorize(fmt.Sprintf("✅ Watcher daemon started in background (PID: %d).", cmd.Process.Pid), ColorBold+ColorGreen))
 		fmt.Println("   It will automatically swap tokens and notify you when 429 errors occur.")
-		fmt.Println("   Stop anytime with: " + colorize("agy-switch watch stop", ColorCyan))
+		fmt.Println("   Stop anytime with: " + colorize("agys watch stop", ColorCyan))
 
 	case "stop":
 		if !isDaemonRunning(pidFile) {
@@ -254,7 +291,7 @@ func cmdWatch(args []string) {
 			fmt.Printf("   Active log: %s\n", getActiveLogFilePath())
 		} else {
 			fmt.Println(colorize("○ Watcher daemon is STOPPED", ColorDim))
-			fmt.Println("   Start it with: " + colorize("agy-switch watch start", ColorCyan))
+			fmt.Println("   Start it with: " + colorize("agys watch start", ColorCyan))
 		}
 
 	case "--daemon-internal":
@@ -293,7 +330,7 @@ func isDaemonRunning(pidFile string) bool {
 	out, errCmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 	if errCmd == nil {
 		comm := strings.TrimSpace(string(out))
-		if strings.Contains(comm, "agy-switch") {
+		if strings.Contains(comm, "agy-switch") || strings.Contains(comm, "agys") {
 			return true
 		}
 	}

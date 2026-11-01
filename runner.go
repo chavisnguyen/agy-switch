@@ -17,7 +17,16 @@ import (
 	"time"
 )
 
-var convUUIDRegex = regexp.MustCompile(`(?i)(?:conversation(?:_id)?[:\s=]+|cascade_id[:=]|--conversation[= ])([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
+var convUUIDRegex = regexp.MustCompile(`(?i)(?:Streaming conversation|Resuming conversation|Created conversation|Starting conversation update stream for|found conversation[:\s]+|conversation(?:_id)?[:\s=]+|cascade_id[:=]|--conversation[= ])\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
+
+func hasContinueFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-c" || a == "--continue" {
+			return true
+		}
+	}
+	return false
+}
 
 func extractConversationID(args []string) string {
 	for _, a := range args {
@@ -48,10 +57,10 @@ func getConversationTitle(convID string) string {
 		query = "SELECT title FROM conversation_summaries WHERE title != '' ORDER BY last_modified_time DESC LIMIT 1;"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, query)
+	cmd := exec.CommandContext(ctx, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -81,21 +90,21 @@ func getLatestConversationID() string {
 		return ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	if cwd, err := os.Getwd(); err == nil && cwd != "" {
 		query := fmt.Sprintf("SELECT conversation_id FROM conversation_summaries WHERE workspace_uris LIKE '%%%s%%' AND conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;", strings.ReplaceAll(cwd, "'", ""))
-		cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-noheader", dbPath, query)
+		cmd := exec.CommandContext(ctx, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
 		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
 			return strings.TrimSpace(string(out))
 		}
 	}
 
 	// 3. Fallback to global latest conversation
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	cmd2 := exec.CommandContext(ctx2, "sqlite3", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
+	cmd2 := exec.CommandContext(ctx2, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
 	out, err := cmd2.Output()
 	if err != nil {
 		return ""
@@ -104,11 +113,21 @@ func getLatestConversationID() string {
 }
 
 func resetTerminal() {
-	cmd := exec.Command("stty", "sane")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	_ = cmd.Run()
+	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+		cmd := exec.Command("stty", "sane", "opost", "onlcr")
+		cmd.Stdin = tty
+		cmd.Stdout = tty
+		cmd.Stderr = tty
+		_ = cmd.Run()
+		tty.Close()
+	} else {
+		cmd := exec.Command("stty", "sane")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	}
+	fmt.Print("\033[?25h\r") // Show cursor and return carriage to column 0
 }
 
 func printContinueHint(convID string) {
@@ -121,7 +140,7 @@ func printContinueHint(convID string) {
 	}
 
 	fmt.Print("\r\n")
-	fmt.Println(colorize("To continue this conversation with auto-failover, run:", ColorBold))
+	fmt.Print(colorize("To continue this conversation with auto-failover, run:", ColorBold) + "\r\n")
 	fmt.Printf("  %s\r\n\r\n", colorize("agys run --conversation="+convID, ColorBold+ColorCyan))
 }
 
@@ -146,17 +165,22 @@ func setTerminalTitle(title string) {
 // cmdRun runs agy as a child process and monitors for rate limit errors in real-time.
 // If a rate-limit occurs, it automatically switches profiles and auto-resumes the conversation.
 func cmdRun(customArgs []string) {
-	fmt.Println(colorize("🚀 agys runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan))
+	fmt.Print(colorize("🚀 agys runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan) + "\r\n")
 
 	activeConvID := extractConversationID(customArgs)
-	if activeConvID == "" {
+	if activeConvID == "" && hasContinueFlag(customArgs) {
 		activeConvID = getLatestConversationID()
 	}
 
-	maxRetries := 3
+	profiles, _ := getAllProfiles()
+	maxRetries := len(profiles)
+	if maxRetries < 3 {
+		maxRetries = 3
+	}
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		rateLimitDetected := false
 		userAborted := false
+		lastErrorLine := ""
 		var mu sync.Mutex
 
 		// Prepare command arguments
@@ -186,16 +210,6 @@ func cmdRun(customArgs []string) {
 					filtered = append(filtered, a)
 				}
 				cmdArgs = append(filtered, "--conversation="+currentID)
-			} else {
-				hasContinue := false
-				for _, a := range cmdArgs {
-					if a == "--continue" || a == "-c" {
-						hasContinue = true
-					}
-				}
-				if !hasContinue {
-					cmdArgs = append([]string{"--continue"}, cmdArgs...)
-				}
 			}
 		}
 
@@ -231,13 +245,12 @@ func cmdRun(customArgs []string) {
 					return
 				case <-ticker.C:
 					mu.Lock()
-					if activeConvID == "" {
-						if id := getLatestConversationID(); id != "" {
-							activeConvID = id
-						}
-					}
 					cID := activeConvID
 					mu.Unlock()
+
+					if cID == "" {
+						continue
+					}
 
 					title := getConversationTitle(cID)
 					if title != "" && title != lastTitle {
@@ -316,33 +329,34 @@ func cmdRun(customArgs []string) {
 				line := partialLine.String()
 				partialLine.Reset()
 
-				// Detect conversation UUID if not yet set
-				mu.Lock()
-				if activeConvID == "" {
-					if m := convUUIDRegex.FindStringSubmatch(line); len(m) > 1 {
-						activeConvID = m[1]
+				// Detect conversation UUID if not yet set (ignore user input echoes)
+				if !strings.Contains(line, "HandleUserInput") && !strings.Contains(line, "input_loop.go") {
+					mu.Lock()
+					if activeConvID == "" {
+						if m := convUUIDRegex.FindStringSubmatch(line); len(m) > 1 {
+							activeConvID = m[1]
+						}
 					}
+					mu.Unlock()
 				}
-				mu.Unlock()
 
-				if rateLimitRegex.MatchString(line) {
+				if isRateLimitError(line) {
 					mu.Lock()
 					firstTrigger := !rateLimitDetected
 					if firstTrigger {
 						rateLimitDetected = true
+						lastErrorLine = line
 					}
 					mu.Unlock()
 
 					if firstTrigger {
-						handleRateLimitTrigger(line)
-
 						// Give agy a moment to finish printing to screen, then terminate it
 						// so cmd.Run() unblocks and runner can auto-resume in next turn
 						go func() {
-							time.Sleep(600 * time.Millisecond)
+							time.Sleep(500 * time.Millisecond)
 							if cmd.Process != nil {
 								_ = cmd.Process.Signal(syscall.SIGTERM)
-								time.Sleep(1200 * time.Millisecond)
+								time.Sleep(1000 * time.Millisecond)
 								if cmd.Process != nil {
 									_ = cmd.Process.Kill()
 								}
@@ -368,8 +382,10 @@ func cmdRun(customArgs []string) {
 		}()
 
 		runErr := cmd.Run()
+		time.Sleep(200 * time.Millisecond)
 		close(stopMonitor)
 		signal.Stop(sigChan)
+		close(sigChan)
 
 		// Always reset terminal immediately after agy exits/terminates
 		resetTerminal()
@@ -377,14 +393,14 @@ func cmdRun(customArgs []string) {
 		mu.Lock()
 		hitRateLimit := rateLimitDetected
 		aborted := userAborted
-		if activeConvID == "" {
-			activeConvID = getLatestConversationID()
-		}
 		cID := activeConvID
+		if cID == "" && !hitRateLimit {
+			cID = getLatestConversationID()
+		}
 		mu.Unlock()
 
-		if aborted && !hitRateLimit {
-			// User intentionally cancelled via Ctrl+C and no rate limit was hit
+		if aborted {
+			// User intentionally cancelled via Ctrl+C
 			printContinueHint(cID)
 			return
 		}
@@ -403,13 +419,20 @@ func cmdRun(customArgs []string) {
 		// Rate limit was detected during run
 		resetTerminal()
 		fmt.Print("\r\n")
-		fmt.Println(colorize("════════════════════════════════════════════════════════════", ColorYellow))
-		fmt.Println(colorize("⚡ Rate limit encountered during this turn!", ColorBold+ColorYellow))
-		fmt.Println(colorize("🔄 Automatically switching to the next account and resuming...", ColorBold+ColorGreen))
-		fmt.Println(colorize("════════════════════════════════════════════════════════════", ColorYellow))
-		fmt.Print("\r\n")
+		fmt.Print(colorize("════════════════════════════════════════════════════════════", ColorYellow) + "\r\n")
+		fmt.Print(colorize("⚡ Rate limit encountered during this turn!", ColorBold+ColorYellow) + "\r\n")
+		fmt.Print(colorize("🔄 Automatically switching to the next account and resuming...", ColorBold+ColorGreen) + "\r\n")
+		fmt.Print(colorize("════════════════════════════════════════════════════════════", ColorYellow) + "\r\n\r\n")
+
+		// Switch profile now that agy child process has completely terminated
+		mu.Lock()
+		errLine := lastErrorLine
+		mu.Unlock()
+		handleRateLimitTrigger(errLine)
+
 		time.Sleep(1 * time.Second)
 	}
 
-	fmt.Println(colorize("❌ Max retry attempts reached or all accounts exhausted.", ColorBold+ColorRed))
+	resetTerminal()
+	fmt.Print(colorize("❌ Max retry attempts reached or all accounts exhausted.", ColorBold+ColorRed) + "\r\n")
 }

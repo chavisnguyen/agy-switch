@@ -117,9 +117,21 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 		return ProfileQuota{Err: err}
 	}
 
-	accessToken, err := getFreshAccessToken(ctx, tokFile.Token.RefreshToken, tokFile.Token.AccessToken)
-	if err != nil {
-		return ProfileQuota{Err: err}
+	accessToken := ""
+	if tokFile.Token.AccessToken != "" && tokFile.Token.Expiry != "" {
+		if exp, err := time.Parse(time.RFC3339, tokFile.Token.Expiry); err == nil {
+			if time.Until(exp) > 2*time.Minute {
+				accessToken = tokFile.Token.AccessToken
+			}
+		}
+	}
+
+	if accessToken == "" {
+		freshToken, err := getFreshAccessToken(ctx, tokFile.Token.RefreshToken, tokFile.Token.AccessToken)
+		if err != nil {
+			return ProfileQuota{Err: err}
+		}
+		accessToken = freshToken
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", modelsEndpoint, bytes.NewBuffer([]byte("{}")))
@@ -136,6 +148,22 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 		return ProfileQuota{Err: err}
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized && tokFile.Token.RefreshToken != "" {
+		// Retry once with refreshed access token
+		if freshToken, err := getFreshAccessToken(ctx, tokFile.Token.RefreshToken, ""); err == nil {
+			req2, err2 := http.NewRequestWithContext(ctx, "POST", modelsEndpoint, bytes.NewBuffer([]byte("{}")))
+			if err2 == nil {
+				req2.Header.Set("Authorization", "Bearer "+freshToken)
+				req2.Header.Set("Content-Type", "application/json")
+				req2.Header.Set("User-Agent", userAgent)
+				if resp2, err3 := client.Do(req2); err3 == nil {
+					defer resp2.Body.Close()
+					resp = resp2
+				}
+			}
+		}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -320,7 +348,7 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 		return "", ""
 	}
 
-	quotas := fetchAllProfilesQuota(profiles, 2500*time.Millisecond)
+	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
 	if len(quotas) == 0 {
 		return "", ""
 	}

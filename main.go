@@ -365,10 +365,202 @@ func cmdBurn() {
 	fmt.Println()
 }
 
+func selectProfileInteractive(profiles []ProfileInfo) int {
+	if len(profiles) == 0 {
+		return -1
+	}
+
+	selectedIdx := 0
+	for i, p := range profiles {
+		if p.IsActive {
+			selectedIdx = i
+			break
+		}
+	}
+
+	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
+
+	savedState := getSttyState()
+	defer func() {
+		restoreSttyState(savedState)
+		fmt.Print("\033[?25h") // Show cursor
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+	go func() {
+		<-sigChan
+		restoreSttyState(savedState)
+		fmt.Print("\033[?25h\r\n")
+		os.Exit(1)
+	}()
+
+	_ = exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1").Run()
+	fmt.Print("\033[?25l") // Hide cursor
+
+	totalLines := len(profiles) + 6
+
+	render := func(firstRender bool) {
+		if !firstRender {
+			fmt.Printf("\033[%dA\r", totalLines)
+		}
+
+		fmt.Print(colorize("📋 SELECT AGY ACCOUNT", ColorBold+ColorCyan) + "\033[K\r\n")
+		fmt.Print(colorize(strings.Repeat("═", 86), ColorDim) + "\033[K\r\n")
+
+		header := fmt.Sprintf("  %-4s %-12s %-26s %-12s %-12s %-12s", "ID", "PROFILE", "EMAIL", "CLAUDE", "GEMINI", "STATUS")
+		fmt.Print(header + "\033[K\r\n")
+		fmt.Print(colorize(strings.Repeat("─", 86), ColorDim) + "\033[K\r\n")
+
+		for idx, p := range profiles {
+			isSelected := (idx == selectedIdx)
+			q := quotas[p.ProfileName]
+
+			status := colorize("○ Ready", ColorDim)
+			if p.IsActive {
+				status = colorize("● ACTIVE", ColorBold+ColorGreen)
+			} else if p.IsCoolingDown {
+				status = colorize("🟡 "+p.CooldownRemain, ColorYellow)
+			} else if q.Err == nil && q.ClaudeRemaining < 0.05 && q.ClaudeResetTime != "" {
+				if t, err := time.Parse(time.RFC3339, q.ClaudeResetTime); err == nil && time.Until(t) > 5*time.Hour+15*time.Minute {
+					status = colorize("🔴 Weekly Cap", ColorRed)
+				}
+			}
+
+			pName := p.ProfileName
+			if p.IsActive {
+				pName = colorize(pName, ColorBold)
+			}
+
+			claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
+			geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
+
+			pointer := "  "
+			sttStr := fmt.Sprintf("[%d]", idx+1)
+			if isSelected {
+				pointer = colorize("❯ ", ColorBold+ColorCyan)
+				sttStr = colorize(sttStr, ColorBold+ColorCyan)
+				pName = colorize(p.ProfileName, ColorBold)
+			} else {
+				sttStr = colorize(sttStr, ColorDim)
+			}
+
+			row := fmt.Sprintf("%s%-4s %-12s %-26s %-12s %-12s %s\033[K\r\n",
+				pointer,
+				padRight(sttStr, 4),
+				padRight(pName, 12),
+				padRight(p.Email, 26),
+				padRight(claudeBadge, 12),
+				padRight(geminiBadge, 12),
+				status,
+			)
+			fmt.Print(row)
+		}
+
+		fmt.Print(colorize(strings.Repeat("─", 86), ColorDim) + "\033[K\r\n")
+		helpText := fmt.Sprintf("%s • %s • %s • %s",
+			colorize("↑/↓ or j/k: navigate", ColorCyan),
+			colorize("Enter: switch", ColorBold+ColorGreen),
+			colorize("1-9: jump", ColorYellow),
+			colorize("q/Esc: cancel", ColorDim),
+		)
+		fmt.Print(helpText + "\033[K\r\n")
+	}
+
+	render(true)
+
+	buf := make([]byte, 16)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			return -1
+		}
+		if n == 0 {
+			continue
+		}
+
+		if n == 1 {
+			b := buf[0]
+			switch b {
+			case 3, 27, 'q', 'Q':
+				return -1
+			case 10, 13, ' ':
+				return selectedIdx
+			case 'k', 'K':
+				if selectedIdx > 0 {
+					selectedIdx--
+				} else {
+					selectedIdx = len(profiles) - 1
+				}
+				render(false)
+			case 'j', 'J':
+				if selectedIdx < len(profiles)-1 {
+					selectedIdx++
+				} else {
+					selectedIdx = 0
+				}
+				render(false)
+			case 'g':
+				selectedIdx = 0
+				render(false)
+			case 'G':
+				selectedIdx = len(profiles) - 1
+				render(false)
+			default:
+				if b >= '1' && b <= '9' {
+					num := int(b - '0')
+					if num <= len(profiles) {
+						return num - 1
+					}
+				}
+			}
+			continue
+		}
+
+		if buf[0] == 27 {
+			if n >= 3 && (buf[1] == '[' || buf[1] == 'O') {
+				switch buf[2] {
+				case 'A': // Up
+					if selectedIdx > 0 {
+						selectedIdx--
+					} else {
+						selectedIdx = len(profiles) - 1
+					}
+					render(false)
+				case 'B': // Down
+					if selectedIdx < len(profiles)-1 {
+						selectedIdx++
+					} else {
+						selectedIdx = 0
+					}
+					render(false)
+				case 'H': // Home
+					selectedIdx = 0
+					render(false)
+				case 'F': // End
+					selectedIdx = len(profiles) - 1
+					render(false)
+				}
+			}
+		}
+	}
+}
+
 func cmdInteractive() {
 	profiles, _ := getAllProfiles()
 	if len(profiles) == 0 {
 		cmdList()
+		return
+	}
+
+	if isTerminalStdin() {
+		choiceIdx := selectProfileInteractive(profiles)
+		if choiceIdx < 0 {
+			fmt.Println("Exited.")
+			return
+		}
+		cmdSwitch(profiles[choiceIdx].ProfileName)
 		return
 	}
 
@@ -780,6 +972,11 @@ func main() {
 	case "help", "--help", "-h":
 		printHelp()
 	default:
+		if strings.HasPrefix(args[0], "-") {
+			fmt.Printf("Unknown flag: %s\n\n", args[0])
+			printHelp()
+			os.Exit(1)
+		}
 		// Shortcut syntax: `agys <profile_name>`
 		cmdSwitch(args[0])
 	}

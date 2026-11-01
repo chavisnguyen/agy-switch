@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -431,7 +432,7 @@ func switchNextProfile(reason string) (string, error) {
 	// 1. Try smart burn / balanced selection based on real-time 5h vs weekly quota
 	if smartName, reason := selectSmartProfile(profiles, activeProfileName, true); smartName != "" {
 		if err := switchProfileByName(smartName); err == nil {
-			fmt.Println(colorize(fmt.Sprintf("🎯 Smart Selection: %s (%s)", smartName, reason), ColorBold+ColorCyan))
+			fmt.Print(colorize(fmt.Sprintf("🎯 Smart Selection: %s (%s)", smartName, reason), ColorBold+ColorCyan) + "\r\n")
 			return smartName, nil
 		}
 	}
@@ -476,9 +477,12 @@ func switchNextProfile(reason string) (string, error) {
 
 		if earliestName != "" {
 			rem := time.Until(time.Unix(earliestExp, 0))
-			return "", fmt.Errorf("all alternative profiles are cooling down (earliest reset: %s in %dm)", earliestName, int(rem.Minutes()))
+			fmt.Print(colorize(fmt.Sprintf("⚠️ All alternative profiles are in cooldown. Auto-recovering earliest: '%s' (%dm cooldown remaining)", earliestName, int(rem.Minutes())), ColorYellow) + "\r\n")
+			clearProfileCooldown(earliestName)
+			selected = earliestName
+		} else {
+			return "", fmt.Errorf("all profiles are currently in cooldown")
 		}
-		return "", fmt.Errorf("all profiles are currently in cooldown")
 	}
 
 	if err := switchProfileByName(selected); err != nil {
@@ -489,6 +493,9 @@ func switchNextProfile(reason string) (string, error) {
 }
 
 func getKeychainPassword() string {
+	if runtime.GOOS != "darwin" {
+		return ""
+	}
 	out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
 	if err != nil {
 		return ""
@@ -526,7 +533,7 @@ func parseKeychainToken(rawKeychain string) (*OAuthTokenFile, string, error) {
 }
 
 func setKeychainPassword(pw string) error {
-	if pw == "" {
+	if runtime.GOOS != "darwin" || pw == "" {
 		return nil
 	}
 	cmd := exec.Command("security", "add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", pw)
@@ -534,11 +541,17 @@ func setKeychainPassword(pw string) error {
 }
 
 func deleteKeychainPassword() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
 	cmd := exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity")
 	return cmd.Run()
 }
 
 func syncKeychainFromTokenFile(tokenFile OAuthTokenFile, email string) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
 	type KeyringPayload struct {
 		Token        TokenDetails `json:"token"`
 		AuthMethod   string       `json:"auth_method"`
