@@ -906,8 +906,10 @@ MANAGEMENT:
   agys save [name]             Save current active session as a profile
   agys rename <old> <new>      Rename a saved profile
   agys remove <name>           Delete a profile
+  agys cooldown [clear]        View or reset profile cooldowns
 
 UTILITY:
+  agys install                 Install global command shortcut
   agys update                  Update agys to the latest GitHub release
   agys version                 Show current installed version
   agys help                    Show this help message`)

@@ -76,10 +76,12 @@ agys update
 | `agys save [name]` | Save current active session as a named profile |
 | `agys rename <old> <new>` | Rename an existing saved profile |
 | `agys remove <name>` | Delete a saved profile |
+| `agys cooldown [clear]` | View active cooldowns or reset all profiles back to Ready |
 
 ### 🛠️ Utility
 | Command | Description |
 | :--- | :--- |
+| `agys install` | Install global shortcut symlinks (`/opt/homebrew/bin` or `~/.local/bin`) |
 | `agys update` | Automatically update `agys` to the latest GitHub release |
 | `agys version` | Show current installed version & architecture |
 | `agys help` | Display built-in help message |
@@ -226,6 +228,7 @@ To continue this conversation with auto-failover, run:
 
 - **Atomic Token Swapping**: Writes tokens to temporary files before atomic rename, preventing file corruption if interrupted.
 - **Keychain Synchronization**: Encodes tokens and syncs with macOS Keychain (`security add-generic-password -s gemini -a antigravity`) so both Antigravity CLI and IDE stay synchronized.
+- **IPv4 Connection Pooling**: Quota queries prioritize TCP IPv4 routing to bypass hanging IPv6 ISP routes and ensure sub-second response times.
 - **Zero Secrets in Repository**: Google OAuth client credentials are obfuscated and resolved at runtime.
 - **Local Storage (`0600`)**: Profiles are stored in `~/.gemini/antigravity-cli/profiles/` accessible only by your user account.
 
