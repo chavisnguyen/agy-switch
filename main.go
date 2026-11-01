@@ -968,11 +968,6 @@ func main() {
 		cmdInstall()
 	case "cooldown":
 		cmdCooldown(args[1:])
-	case "watch":
-		fmt.Println(colorize("ℹ️  The 'watch' command has been removed and consolidated into 'agys run'.", ColorYellow))
-		fmt.Println("👉 To run with auto-failover, simply use: " + colorize("agys run", ColorBold+ColorCyan))
-		fmt.Println("👉 Or resume conversations with: " + colorize("agys conv", ColorBold+ColorCyan))
-		return
 	case "help", "--help", "-h":
 		printHelp()
 	default:

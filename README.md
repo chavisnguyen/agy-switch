@@ -248,7 +248,7 @@ To continue this conversation with auto-failover, run:
 ├── runner.go                   # Smart wrapper: 429 auto-failover, tab title sync & hints
 ├── runner_test.go              # Tests for regex UUID parsing & argument extraction
 ├── updater.go                  # Self-updater (agys update), version checker & release puller
-├── watcher.go                  # Log tailer, regex detector, background daemon & macOS alerts
+├── failover.go                 # Real-time rate-limit matcher, debounce & auto-failover engine
 ├── install.sh                  # 1-line curl installer & local installer
 ├── Makefile                    # make build, make install, make clean
 └── README.md                   # Documentation
