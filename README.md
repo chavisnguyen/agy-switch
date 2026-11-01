@@ -95,7 +95,7 @@ agys login work
 ```
 *The wizard temporarily stashes your active session, launches `agy` for Google browser login, saves the new profile as `work`, and restores cleanly.*
 
-### 3. Check Real-Time Quotas
+### 3. Check Real-Time Quotas (5h Cycle vs 7-Day Weekly Cap)
 ```bash
 agys status
 ```
@@ -105,25 +105,31 @@ Output preview:
 ══════════════════════════════════════════════════════════
 [1] work (● ACTIVE)
     Email  : work.developer@gmail.com
-    Claude : 🟢 100.0% (resets 31 Oct 22:54)
-    Gemini : 🟢  76.1% (resets 31 Oct 20:13)
+    Claude : 🟢 100.0% (resets 16:46 in 4h59m [5h])
+    Gemini : 🟢 100.0% (resets 16:46 in 4h59m [5h])
     ──────────────────────────────────────────────────
-[2] main (○ Ready)
+[2] personal (○ Ready)
     Email  : personal@gmail.com
-    Claude : 🔴   0.0% (resets 02 Nov 21:20)
-    Gemini : 🟡   0.1% (resets 31 Oct 21:00)
+    Claude : 🟢 100.0% (resets 16:46 in 4h59m [5h])
+    Gemini : 🟢  79.8% (resets 12:43 in 56m [5h])
     ──────────────────────────────────────────────────
-[3] personal2 (○ Ready)
-    Email  : personal2@gmail.com
-    Claude : 🔴   0.0% (resets 05 Nov 14:39)
-    Gemini : 🔴   0.0% (resets 04 Nov 01:12)
+[3] main (🔴 Weekly Cap)
+    Email  : main.dev@gmail.com
+    Claude : 🔴   0.0% (resets 02 Nov 21:20, 1d left [Weekly Cap ⚠️])
+    Gemini : 🟢 100.0% (resets 16:46 in 4h59m [5h])
 ══════════════════════════════════════════════════════════
 ```
+
+> [!NOTE]
+> `agys` automatically detects whether an account is in the standard **5-hour burst cycle** (`[5h]`) or has reached Google's **7-day protective limit** (`[Weekly Cap ⚠️]`), preventing blind switches into dead accounts!
 
 ### 4. Switch Accounts On The Fly
 ```bash
 # Switch directly
 agys main
+
+# Or optimize quota before expiration
+agys burn
 
 # Or rotate to next healthy account
 agys next
@@ -131,6 +137,77 @@ agys next
 # Or open interactive menu
 agys
 ```
+
+---
+
+## 🔥 Smart Burn Optimizer (`agys burn`)
+
+Google Antigravity quotas operate on a **"Use-It-Or-Lose-It"** model. If an account has 70% quota remaining with 30 minutes until reset, that quota evaporates if unused. 
+
+Running `agys burn` scans real-time quotas across all accounts and selects the optimal profile:
+
+```bash
+agys burn
+```
+
+```text
+🔥 AGYS SMART BURN: 5H VS WEEKLY CAP OPTIMIZER
+════════════════════════════════════════════════════════════════════════════════════════
+Scanning real-time quotas, 5h burst windows, and 7-day Weekly Caps...
+
+ID   PROFILE        CLAUDE         GEMINI         CYCLE              RECOMMENDATION    
+────────────────────────────────────────────────────────────────────────────────────────
+[ 1] 1craft         🟢 100.0%       🟢 100.0%       [5h Cycle]         ○ Eligible
+[ 2] chavisngn      🟢 100.0%       🟢  79.8%       [5h Cycle]         ● ACTIVE
+[ 3] mailecmcglobal 🟢 100.0%       🟢  95.8%       [5h Cycle]         ○ Eligible
+[ 4] main           🔴   0.0%       🟢 100.0%       [Weekly Cap ⚠️]    ⚠️ Claude locked (Gemini only)
+[ 5] ngocdung       🔴   0.0%       🔴   0.0%       [Weekly Cap ⚠️]    ❌ Weekly Cap locked (0% quota)
+────────────────────────────────────────────────────────────────────────────────────────
+
+✅ Active account 'chavisngn' is ALREADY the optimal burn candidate!
+   Reason: Claude 100.0% in [5h] cycle (resets in 4h59m) - optimal balance
+```
+
+### How Smart Burn Works:
+1. **Urgent Burn**: If an account is expiring in `< 90m` with `>= 10%` quota, it flags as `🔥 URGENT BURN` and switches to it so no tokens are wasted.
+2. **Weekly Cap Protection**: Accounts with `0.0%` quota and multi-day reset locks (`[Weekly Cap ⚠️]`) are strictly skipped.
+3. **Balanced Load**: When accounts have ample time, it balances usage across 5h accounts so no single account prematurely triggers the 7-day weekly cap.
+4. **Auto-Failover Integration**: When `agys run` hits an HTTP 429 error, it automatically invokes this algorithm to pick the healthiest replacement account.
+
+---
+
+## 💬 Interactive Conversation Picker (`agys conv`)
+
+Resume conversations for your current workspace without hunting for UUIDs:
+
+```bash
+agys conv
+```
+
+```text
+💬 CONVERSATIONS FOR: /Users/chavis/Documents/personal/tool/agy-switch
+════════════════════════════════════════════════════════════════════════════════════════════
+    ID    TITLE                                  STEPS   LAST ACTIVE        CONV ID           
+────────────────────────────────────────────────────────────────────────────────────────────
+❯   [1]   Agy Switch Rate Limit Error            524     Just now           6c04bd0d…          ●
+    [2]   Checking Status Command Usage          770     3h ago             f51a3479…         
+    [3]   General Greeting                       71      23h ago            0d816ff0…         
+    [4]   Simple Greeting                        2       Yesterday          c1fd6d46…         
+    [5]   AI Model Identification                1       Yesterday          8ab7b921…         
+────────────────────────────────────────────────────────────────────────────────────────────
+● indicates current active session for this folder
+↑/↓ or j/k: navigate • Enter: resume • 1-9: jump • q/Esc: cancel
+```
+
+### Controls & Options:
+* **`↑` / `↓`** (or **`j` / `k`**): Smoothly navigate up and down with loop-around.
+* **`Enter`**: Instantly resume the highlighted conversation with auto-failover enabled (`agys run --conversation=<id>`).
+* **`1` – `9`**: Jump directly to a conversation number.
+* **`q` / `Esc`**: Cancel and exit cleanly.
+* **Resume immediately by number**: `agys conv 2` (resumes conversation #2 directly).
+* **View other workspaces**: `agys conv /path/to/other-project` or `agys conv other-project`.
+* **View all recent chats globally**: `agys conv -a` (or `--all`).
+* **List only without prompt**: `agys conv -l`.
 
 ---
 
@@ -179,16 +256,21 @@ To continue this conversation with auto-failover, run:
 .
 ├── .github/
 │   └── workflows/
-│       └── release.yml  # Automated cross-platform release builder
-├── main.go              # CLI router, list, and interactive commands
-├── profiles.go          # Profile storage, JWT decode, atomic swap & Keychain sync
-├── quota.go             # Parallel real-time quota inspection (Claude & Gemini)
-├── runner.go            # Smart wrapper: 429 auto-failover, tab title sync & hints
-├── updater.go           # Self-updater (agys update), version checker & release puller
-├── watcher.go           # Log tailer, regex detector, background daemon & macOS alerts
-├── install.sh           # 1-line curl installer & local installer
-├── Makefile             # make build, make install, make clean
-└── README.md            # Documentation
+│       ├── ci.yml              # Automated cross-platform tests (macOS & Ubuntu)
+│       └── release.yml         # Automated cross-platform release builder
+├── main.go                     # CLI entrypoint, router, and command handlers
+├── conversations.go            # Interactive conversation picker & SQLite metadata parser
+├── conversations_test.go       # Tests for relative time & string truncation
+├── profiles.go                 # Profile storage, JWT decode, atomic swap & Keychain sync
+├── quota.go                    # Parallel quota inspection & 5h vs Weekly Cap optimizer
+├── quota_test.go               # Tests for 5h vs Weekly reset formatting & candidate scoring
+├── runner.go                   # Smart wrapper: 429 auto-failover, tab title sync & hints
+├── runner_test.go              # Tests for regex UUID parsing & argument extraction
+├── updater.go                  # Self-updater (agys update), version checker & release puller
+├── watcher.go                  # Log tailer, regex detector, background daemon & macOS alerts
+├── install.sh                  # 1-line curl installer & local installer
+├── Makefile                    # make build, make install, make clean
+└── README.md                   # Documentation
 ```
 
 ---
