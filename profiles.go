@@ -419,14 +419,24 @@ func switchNextProfile(reason string) (string, error) {
 
 	// Find current active index
 	activeIdx := -1
+	activeProfileName := ""
 	for idx, p := range profiles {
 		if p.IsActive {
 			activeIdx = idx
+			activeProfileName = p.ProfileName
 			break
 		}
 	}
 
-	// Round-robin selection: pick next non-cooldown profile
+	// 1. Try smart burn / balanced selection based on real-time 5h vs weekly quota
+	if smartName, reason := selectSmartProfile(profiles, activeProfileName, true); smartName != "" {
+		if err := switchProfileByName(smartName); err == nil {
+			fmt.Println(colorize(fmt.Sprintf("🎯 Smart Selection: %s (%s)", smartName, reason), ColorBold+ColorCyan))
+			return smartName, nil
+		}
+	}
+
+	// 2. Fallback to Round-robin selection: pick next non-cooldown profile
 	startIdx := 0
 	if activeIdx >= 0 {
 		startIdx = activeIdx

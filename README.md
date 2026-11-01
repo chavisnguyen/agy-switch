@@ -60,6 +60,7 @@ agys update
 | `agys` | Interactive numbered menu to select and switch accounts |
 | `agys <profile>` | Instantly switch to `<profile>` |
 | `agys next` | Rotate to the next available healthy profile (Round-Robin) |
+| **`agys burn`** | **Smart optimizer**: switch to account expiring soonest to burn quota before reset |
 | `agys status` | View active account details and real-time Claude/Gemini quotas |
 | `agys list` | Formatted table of all saved profiles and quota percentages |
 | `agys save [name]` | Save current active session as a named profile |

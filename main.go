@@ -86,12 +86,18 @@ func cmdList() {
 
 	anyActive := false
 	for idx, p := range profiles {
+		q := quotas[p.ProfileName]
+
 		status := colorize("○ Ready", ColorDim)
 		if p.IsActive {
 			status = colorize("● ACTIVE", ColorBold+ColorGreen)
 			anyActive = true
 		} else if p.IsCoolingDown {
 			status = colorize("🟡 "+p.CooldownRemain, ColorYellow)
+		} else if q.Err == nil && q.ClaudeRemaining < 0.05 && q.ClaudeResetTime != "" {
+			if t, err := time.Parse(time.RFC3339, q.ClaudeResetTime); err == nil && time.Until(t) > 5*time.Hour+15*time.Minute {
+				status = colorize("🔴 Weekly Cap", ColorRed)
+			}
 		}
 
 		pName := p.ProfileName
@@ -99,7 +105,6 @@ func cmdList() {
 			pName = colorize(pName, ColorBold)
 		}
 
-		q := quotas[p.ProfileName]
 		claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
 		geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
 
@@ -305,13 +310,13 @@ func cmdCurrent() {
 
 		claudeStr := formatQuotaBadge(q.ClaudeRemaining, q.Err)
 		if q.Err == nil && q.ClaudeResetTime != "" {
-			claudeStr += colorize(fmt.Sprintf(" (resets %s)", formatResetTime(q.ClaudeResetTime)), ColorDim)
+			claudeStr += colorize(formatQuotaReset(q.ClaudeResetTime), ColorDim)
 		}
 		fmt.Printf("    Claude : %s\n", claudeStr)
 
 		geminiStr := formatQuotaBadge(q.GeminiRemaining, q.Err)
 		if q.Err == nil && q.GeminiResetTime != "" {
-			geminiStr += colorize(fmt.Sprintf(" (resets %s)", formatResetTime(q.GeminiResetTime)), ColorDim)
+			geminiStr += colorize(formatQuotaReset(q.GeminiResetTime), ColorDim)
 		}
 		fmt.Printf("    Gemini : %s\n", geminiStr)
 
@@ -323,6 +328,104 @@ func cmdCurrent() {
 	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
 	fmt.Println()
 	CheckUpdateNotice()
+}
+
+func cmdBurn() {
+	profiles, _ := getAllProfiles()
+	if len(profiles) == 0 {
+		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
+		return
+	}
+
+	fmt.Println()
+	fmt.Println(colorize("🔥 AGYS SMART BURN: 5H VS WEEKLY CAP OPTIMIZER", ColorBold+ColorCyan))
+	fmt.Println(colorize(strings.Repeat("═", 88), ColorDim))
+	fmt.Println("Scanning real-time quotas, 5h burst windows, and 7-day Weekly Caps...")
+	fmt.Println()
+
+	quotas := fetchAllProfilesQuota(profiles, 5*time.Second)
+	now := time.Now()
+
+	header := fmt.Sprintf("%-4s %-14s %-14s %-14s %-18s %-18s", "ID", "PROFILE", "CLAUDE", "GEMINI", "CYCLE", "RECOMMENDATION")
+	fmt.Println(header)
+	fmt.Println(colorize(strings.Repeat("─", 88), ColorDim))
+
+	activeProfile := ""
+	for _, p := range profiles {
+		if p.IsActive {
+			activeProfile = p.ProfileName
+			break
+		}
+	}
+
+	for idx, p := range profiles {
+		q := quotas[p.ProfileName]
+		cand := evaluateProfileCandidate(p, q, now)
+
+		pName := p.ProfileName
+		if p.IsActive {
+			pName = colorize(pName, ColorBold)
+		}
+
+		claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
+		geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
+
+		cycleTag := colorize("[5h Cycle]", ColorGreen)
+		if cand.IsClaudeWeekly && cand.ClaudeRemaining < 0.05 {
+			cycleTag = colorize("[Weekly Cap ⚠️]", ColorRed)
+		} else if cand.IsClaudeWeekly {
+			cycleTag = colorize("[Weekly Cap ⚠️]", ColorYellow)
+		}
+
+		recommendation := colorize("○ Eligible", ColorDim)
+		if p.IsActive {
+			recommendation = colorize("● ACTIVE", ColorBold+ColorGreen)
+		} else if cand.IsLocked {
+			recommendation = colorize("❌ "+cand.LockReason, ColorRed)
+		} else if cand.IsClaudeWeekly && cand.ClaudeRemaining < 0.05 {
+			recommendation = colorize("⚠️ Claude locked (Gemini only)", ColorYellow)
+		} else if cand.ClaudeDiff > 0 && cand.ClaudeDiff <= 90*time.Minute && cand.ClaudeRemaining >= 0.10 {
+			recommendation = colorize("🔥 URGENT BURN", ColorBold+ColorYellow)
+		}
+
+		sttStr := fmt.Sprintf("[%2d]", idx+1)
+		line := fmt.Sprintf("%-4s %-14s %-14s %-14s %-18s %s",
+			sttStr,
+			padRight(pName, 14),
+			padRight(claudeBadge, 14),
+			padRight(geminiBadge, 14),
+			padRight(cycleTag, 18),
+			recommendation,
+		)
+		fmt.Println(line)
+	}
+
+	fmt.Println(colorize(strings.Repeat("─", 88), ColorDim))
+	fmt.Println()
+
+	// Find best burn candidate (including active profile to see if active is already best)
+	bestOverall, reasonOverall := selectSmartProfile(profiles, "", false)
+	if bestOverall == "" {
+		fmt.Println(colorize("⚠️  No eligible candidate found with healthy quota. All accounts may be cooling down or exhausted.", ColorYellow))
+		return
+	}
+
+	if bestOverall == activeProfile {
+		fmt.Println(colorize(fmt.Sprintf("✅ Active account '%s' is ALREADY the optimal burn candidate!", activeProfile), ColorBold+ColorGreen))
+		fmt.Printf("   Reason: %s\n\n", colorize(reasonOverall, ColorCyan))
+		return
+	}
+
+	fmt.Println(colorize(fmt.Sprintf("🚀 Switching to optimal burn candidate: '%s'", strings.ToUpper(bestOverall)), ColorBold+ColorGreen))
+	fmt.Printf("   Reason: %s\n\n", colorize(reasonOverall, ColorCyan))
+
+	if err := switchProfileByName(bestOverall); err != nil {
+		fmt.Println(colorize(fmt.Sprintf("❌ Switch failed: %v", err), ColorRed))
+		return
+	}
+
+	fmt.Println(colorize(fmt.Sprintf("🎉 Successfully switched to '%s'!", bestOverall), ColorBold+ColorGreen))
+	fmt.Println()
 }
 
 func cmdInteractive() {
@@ -662,8 +765,9 @@ CORE COMMANDS:
   agys                         Interactive menu to choose and switch accounts
   agys <profile_name>          Instantly switch to the specified profile
   agys next                    Rotate to the next available profile (Round-Robin)
+  agys burn                    Smart optimizer: switch to account expiring soonest to burn quota
   agys list                    List all saved profiles with real-time quotas
-  agys status                  Display active account details and real-time quota
+  agys status                  Display active account details, 5h vs Weekly reset times
   agys save [name]             Save current active session as a profile
   agys login [name]            Log in to a new Google account and save profile
   agys rename <old> <new>      Rename a saved profile
@@ -709,6 +813,8 @@ func main() {
 		cmdSwitch(args[1])
 	case "next":
 		cmdNext()
+	case "burn":
+		cmdBurn()
 	case "status":
 		cmdCurrent()
 	case "login":
