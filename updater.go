@@ -137,14 +137,17 @@ func cmdUpdate() {
 
 	fmt.Println(colorize(fmt.Sprintf("==> Downloading %s...", assetName), ColorCyan))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	dlCtx, dlCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer dlCancel()
+
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		fmt.Printf("%s Failed to create download request: %v\n", colorize("❌", ColorRed), err)
 		return
 	}
 	req.Header.Set("User-Agent", "agys-updater")
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("%s Download failed: %v\n", colorize("❌", ColorRed), err)

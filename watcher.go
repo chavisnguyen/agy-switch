@@ -145,7 +145,7 @@ func watchLoop(stopChan <-chan struct{}) {
 	cliHome, _, _, _, _, _, _ := getPaths()
 	symlinkPath := filepath.Join(cliHome, "cli.log")
 
-	fmt.Println(colorize("👀 agy-switch watch is ACTIVE", ColorBold+ColorCyan))
+	fmt.Println(colorize("👀 agys watch is ACTIVE", ColorBold+ColorCyan))
 	fmt.Printf("   Monitoring: %s\n", colorize(symlinkPath, ColorGreen))
 	fmt.Println(colorize("   Auto-switches accounts on HTTP 429 / RESOURCE_EXHAUSTED errors.", ColorDim))
 	fmt.Println(colorize("   Press Ctrl+C to stop.\n", ColorDim))

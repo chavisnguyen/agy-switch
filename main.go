@@ -875,8 +875,9 @@ func cmdInstall() {
 		_ = os.Remove(targetAgySwitch)
 
 		if err := os.Symlink(execPath, targetAgys); err == nil {
+			_ = os.Symlink(execPath, targetAgySwitch)
 			fmt.Println(colorize(fmt.Sprintf("✅ Global shortcut installed at: %s", targetAgys), ColorBold+ColorGreen))
-			fmt.Printf("👉 You can now run '%s' from any terminal session.\n", colorize("agys", ColorCyan))
+			fmt.Printf("👉 You can now run '%s' (or '%s') from any terminal session.\n", colorize("agys", ColorCyan), colorize("agy-switch", ColorDim))
 			installed = true
 			break
 		}

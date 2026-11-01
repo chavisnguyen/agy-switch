@@ -468,7 +468,12 @@ func switchNextProfile(reason string) (string, error) {
 			if p.IsActive {
 				continue
 			}
-			exp := cooldowns[p.ProfileName]
+			exp, exists := cooldowns[p.ProfileName]
+			if !exists || exp <= 0 {
+				earliestName = p.ProfileName
+				earliestExp = 0
+				break
+			}
 			if earliestExp == 0 || exp < earliestExp {
 				earliestExp = exp
 				earliestName = p.ProfileName
@@ -476,8 +481,14 @@ func switchNextProfile(reason string) (string, error) {
 		}
 
 		if earliestName != "" {
-			rem := time.Until(time.Unix(earliestExp, 0))
-			fmt.Print(colorize(fmt.Sprintf("⚠️ All alternative profiles are in cooldown. Auto-recovering earliest: '%s' (%dm cooldown remaining)", earliestName, int(rem.Minutes())), ColorYellow) + "\r\n")
+			remMin := 0
+			if earliestExp > 0 {
+				remMin = int(time.Until(time.Unix(earliestExp, 0)).Minutes())
+				if remMin < 0 {
+					remMin = 0
+				}
+			}
+			fmt.Print(colorize(fmt.Sprintf("⚠️ All alternative profiles are in cooldown. Auto-recovering earliest: '%s' (%dm cooldown remaining)", earliestName, remMin), ColorYellow) + "\r\n")
 			clearProfileCooldown(earliestName)
 			selected = earliestName
 		} else {

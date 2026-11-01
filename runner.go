@@ -412,6 +412,8 @@ func cmdRun(customArgs []string) {
 				if exitErr, ok := runErr.(*exec.ExitError); ok {
 					os.Exit(exitErr.ExitCode())
 				}
+				fmt.Printf(colorize("❌ Failed to run agy: %v\n", ColorRed), runErr)
+				return
 			}
 			return
 		}
