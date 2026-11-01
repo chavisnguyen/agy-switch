@@ -55,28 +55,39 @@ type ProfileInfo struct {
 	Hash           string
 }
 
+type AppPaths struct {
+	CLIHome      string
+	TokenPath    string
+	ProfilesDir  string
+	CurrentFile  string
+	BackupPath   string
+	CooldownFile string
+}
+
 // System Paths
-func getPaths() (cliHome, tokenPath, profilesDir, currentFile, backupPath, cooldownFile, pidFile string) {
+func getPaths() AppPaths {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
-	cliHome = filepath.Join(home, ".gemini", "antigravity-cli")
-	tokenPath = filepath.Join(cliHome, "antigravity-oauth-token")
-	profilesDir = filepath.Join(cliHome, "profiles")
-	currentFile = filepath.Join(profilesDir, ".current")
-	backupPath = filepath.Join(cliHome, "antigravity-oauth-token.bak")
-	cooldownFile = filepath.Join(profilesDir, ".cooldown.json")
-	pidFile = filepath.Join(profilesDir, ".watch.pid")
-	return
+	cliHome := filepath.Join(home, ".gemini", "antigravity-cli")
+	profilesDir := filepath.Join(cliHome, "profiles")
+	return AppPaths{
+		CLIHome:      cliHome,
+		TokenPath:    filepath.Join(cliHome, "antigravity-oauth-token"),
+		ProfilesDir:  profilesDir,
+		CurrentFile:  filepath.Join(profilesDir, ".current"),
+		BackupPath:   filepath.Join(cliHome, "antigravity-oauth-token.bak"),
+		CooldownFile: filepath.Join(profilesDir, ".cooldown.json"),
+	}
 }
 
 func ensureDirs() error {
-	_, _, profilesDir, _, _, _, _ := getPaths()
-	if err := os.MkdirAll(profilesDir, 0700); err != nil {
+	paths := getPaths()
+	if err := os.MkdirAll(paths.ProfilesDir, 0700); err != nil {
 		return err
 	}
-	return os.Chmod(profilesDir, 0700)
+	return os.Chmod(paths.ProfilesDir, 0700)
 }
 
 // JWT & Token Parsing
@@ -241,10 +252,10 @@ func sanitizeName(name string) string {
 
 // Cooldown Management
 func loadCooldowns() map[string]int64 {
-	_, _, _, _, _, cooldownFile, _ := getPaths()
+	paths := getPaths()
 	result := make(map[string]int64)
 
-	data, err := os.ReadFile(cooldownFile)
+	data, err := os.ReadFile(paths.CooldownFile)
 	if err != nil {
 		return result
 	}
@@ -269,9 +280,9 @@ func loadCooldowns() map[string]int64 {
 }
 
 func saveCooldowns(m map[string]int64) {
-	_, _, _, _, _, cooldownFile, _ := getPaths()
+	paths := getPaths()
 	data, _ := json.MarshalIndent(m, "", "  ")
-	_ = os.WriteFile(cooldownFile, data, 0600)
+	_ = os.WriteFile(paths.CooldownFile, data, 0600)
 }
 
 func setProfileCooldown(profileName string, duration time.Duration) {
@@ -287,8 +298,8 @@ func clearProfileCooldown(profileName string) {
 }
 
 func clearAllCooldowns() {
-	_, _, _, _, _, cooldownFile, _ := getPaths()
-	_ = os.Remove(cooldownFile)
+	paths := getPaths()
+	_ = os.Remove(paths.CooldownFile)
 }
 
 // Profiles Queries
@@ -297,16 +308,16 @@ func getAllProfiles() ([]ProfileInfo, error) {
 		return nil, err
 	}
 
-	_, tokenPath, profilesDir, currentFile, _, _, _ := getPaths()
-	activeInfo, _ := readTokenInfo(tokenPath)
+	paths := getPaths()
+	activeInfo, _ := readTokenInfo(paths.TokenPath)
 	cooldowns := loadCooldowns()
 
 	currentSaved := ""
-	if b, err := os.ReadFile(currentFile); err == nil {
+	if b, err := os.ReadFile(paths.CurrentFile); err == nil {
 		currentSaved = strings.TrimSpace(string(b))
 	}
 
-	entries, err := os.ReadDir(profilesDir)
+	entries, err := os.ReadDir(paths.ProfilesDir)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +331,7 @@ func getAllProfiles() ([]ProfileInfo, error) {
 		}
 
 		pName := strings.TrimSuffix(entry.Name(), ".json")
-		fullPath := filepath.Join(profilesDir, entry.Name())
+		fullPath := filepath.Join(paths.ProfilesDir, entry.Name())
 		info, err := readTokenInfo(fullPath)
 		if err != nil {
 			continue
@@ -394,7 +405,7 @@ func getAllProfiles() ([]ProfileInfo, error) {
 	if activeIdx >= 0 && activeIdx < len(profiles) {
 		profiles[activeIdx].IsActive = true
 		if profiles[activeIdx].ProfileName != currentSaved {
-			_ = os.WriteFile(currentFile, []byte(profiles[activeIdx].ProfileName), 0600)
+			_ = os.WriteFile(paths.CurrentFile, []byte(profiles[activeIdx].ProfileName), 0600)
 		}
 	}
 
@@ -595,29 +606,29 @@ func switchProfileByName(name string) error {
 	}
 
 	name = sanitizeName(name)
-	_, tokenPath, profilesDir, currentFile, backupPath, _, _ := getPaths()
-	targetPath := filepath.Join(profilesDir, name+".json")
+	paths := getPaths()
+	targetPath := filepath.Join(paths.ProfilesDir, name+".json")
 
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 		return fmt.Errorf("profile '%s' not found", name)
 	}
 
 	// 1. Sync currently active token back to previous profile's file to preserve refreshed access tokens
-	if curData, err := os.ReadFile(currentFile); err == nil {
+	if curData, err := os.ReadFile(paths.CurrentFile); err == nil {
 		prevName := strings.TrimSpace(string(curData))
 		if prevName != "" && prevName != name {
-			prevPath := filepath.Join(profilesDir, prevName+".json")
+			prevPath := filepath.Join(paths.ProfilesDir, prevName+".json")
 			if _, err := os.Stat(prevPath); err == nil {
-				if tokInfo, err := readTokenInfo(tokenPath); err == nil && tokInfo != nil && tokInfo.RefreshToken != "" {
-					_ = copyFile(tokenPath, prevPath, 0600)
+				if tokInfo, err := readTokenInfo(paths.TokenPath); err == nil && tokInfo != nil && tokInfo.RefreshToken != "" {
+					_ = copyFile(paths.TokenPath, prevPath, 0600)
 				}
 			}
 		}
 	}
 
 	// 2. Backup current token
-	if _, err := os.Stat(tokenPath); err == nil {
-		_ = copyFile(tokenPath, backupPath, 0600)
+	if _, err := os.Stat(paths.TokenPath); err == nil {
+		_ = copyFile(paths.TokenPath, paths.BackupPath, 0600)
 	}
 
 	// Read & atomic write
@@ -626,10 +637,10 @@ func switchProfileByName(name string) error {
 		return fmt.Errorf("failed to read profile: %w", err)
 	}
 
-	if err := atomicWriteFile(tokenPath, data, 0600); err != nil {
+	if err := atomicWriteFile(paths.TokenPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write active token: %w", err)
 	}
-	_ = os.WriteFile(currentFile, []byte(name), 0600)
+	_ = os.WriteFile(paths.CurrentFile, []byte(name), 0600)
 
 	// Sync with macOS Keychain so both CLI & IDE stay in sync
 	var tokFile OAuthTokenFile

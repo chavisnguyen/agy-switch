@@ -43,8 +43,8 @@ func extractConversationID(args []string) string {
 }
 
 func getConversationTitle(convID string) string {
-	cliHome, _, _, _, _, _, _ := getPaths()
-	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
+	paths := getPaths()
+	dbPath := filepath.Join(paths.CLIHome, "conversation_summaries.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return ""
 	}
@@ -69,11 +69,11 @@ func getConversationTitle(convID string) string {
 }
 
 func getLatestConversationID() string {
-	cliHome, _, _, _, _, _, _ := getPaths()
+	paths := getPaths()
 
 	// 1. Check cache/last_conversations.json for current working directory (most accurate for active session)
 	if cwd, err := os.Getwd(); err == nil {
-		cachePath := filepath.Join(cliHome, "cache", "last_conversations.json")
+		cachePath := filepath.Join(paths.CLIHome, "cache", "last_conversations.json")
 		if data, err := os.ReadFile(cachePath); err == nil {
 			var m map[string]string
 			if json.Unmarshal(data, &m) == nil {
@@ -85,7 +85,7 @@ func getLatestConversationID() string {
 	}
 
 	// 2. Fallback to conversation_summaries.db filtered by current workspace
-	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
+	dbPath := filepath.Join(paths.CLIHome, "conversation_summaries.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return ""
 	}

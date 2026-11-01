@@ -76,15 +76,15 @@ func formatRelativeTime(isoStr string) string {
 }
 
 func getFolderConversations(targetDir string, isAll bool, limit int) ([]ConversationSummary, string, error) {
-	cliHome, _, _, _, _, _, _ := getPaths()
-	dbPath := filepath.Join(cliHome, "conversation_summaries.db")
+	paths := getPaths()
+	dbPath := filepath.Join(paths.CLIHome, "conversation_summaries.db")
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, "", fmt.Errorf("conversation database not found at %s", dbPath)
 	}
 
 	// 1. Get active conversation ID from last_conversations.json
 	activeID := ""
-	cachePath := filepath.Join(cliHome, "cache", "last_conversations.json")
+	cachePath := filepath.Join(paths.CLIHome, "cache", "last_conversations.json")
 	if data, err := os.ReadFile(cachePath); err == nil {
 		var m map[string]string
 		if json.Unmarshal(data, &m) == nil {

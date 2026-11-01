@@ -33,8 +33,8 @@ type updateCache struct {
 }
 
 func getUpdateCachePath() string {
-	cliHome, _, _, _, _, _, _ := getPaths()
-	return filepath.Join(cliHome, ".agys_update.json")
+	paths := getPaths()
+	return filepath.Join(paths.CLIHome, ".agys_update.json")
 }
 
 func fetchLatestRelease(ctx context.Context) (*githubRelease, error) {

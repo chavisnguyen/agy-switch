@@ -72,8 +72,8 @@ func cmdSave(name string) {
 		return
 	}
 
-	_, tokenPath, profilesDir, currentFile, _, _, _ := getPaths()
-	activeInfo, err := readTokenInfo(tokenPath)
+	paths := getPaths()
+	activeInfo, err := readTokenInfo(paths.TokenPath)
 	if err != nil {
 		fmt.Println(colorize("❌ Error: Active token file not found at ~/.gemini/antigravity-cli/antigravity-oauth-token", ColorRed))
 		fmt.Println("   Please run `agy` to log in before saving a profile.")
@@ -100,7 +100,7 @@ func cmdSave(name string) {
 		return
 	}
 
-	targetPath := filepath.Join(profilesDir, name+".json")
+	targetPath := filepath.Join(paths.ProfilesDir, name+".json")
 	if _, err := os.Stat(targetPath); err == nil {
 		fmt.Printf("Profile '%s' already exists. Overwrite? [y/N]: ", name)
 		confirm, _ := reader.ReadString('\n')
@@ -114,7 +114,7 @@ func cmdSave(name string) {
 	fmt.Print(colorize("🔍 Verifying account status with Google...", ColorDim))
 	ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCheck()
-	q := fetchProfileQuota(ctxCheck, tokenPath)
+	q := fetchProfileQuota(ctxCheck, paths.TokenPath)
 	if q.Err != nil && strings.Contains(q.Err.Error(), "Verify your account") {
 		fmt.Println()
 		fmt.Println(colorize("❌ Cannot save profile: Account requires security verification by Google (\"Verify your account\").", ColorBold+ColorRed))
@@ -127,11 +127,11 @@ func cmdSave(name string) {
 		fmt.Printf(colorize(" (Notice: %v)\n", ColorYellow), q.Err)
 	}
 
-	if err := copyFile(tokenPath, targetPath, 0600); err != nil {
+	if err := copyFile(paths.TokenPath, targetPath, 0600); err != nil {
 		fmt.Printf(colorize("❌ Error saving profile file: %v\n", ColorRed), err)
 		return
 	}
-	_ = os.WriteFile(currentFile, []byte(name), 0600)
+	_ = os.WriteFile(paths.CurrentFile, []byte(name), 0600)
 
 	fmt.Println(colorize(fmt.Sprintf("✅ Profile saved successfully: %s", name), ColorBold+ColorGreen))
 	fmt.Printf("   Email: %s\n", colorize(activeInfo.Email, ColorCyan))
@@ -140,7 +140,7 @@ func cmdSave(name string) {
 
 func cmdSwitch(name string) {
 	name = sanitizeName(name)
-	_, tokenPath, _, _, _, _, _ := getPaths()
+	paths := getPaths()
 
 	profiles, _ := getAllProfiles()
 	var targetProfile *ProfileInfo
@@ -171,7 +171,7 @@ func cmdSwitch(name string) {
 		return
 	}
 
-	info, _ := readTokenInfo(tokenPath)
+	info, _ := readTokenInfo(paths.TokenPath)
 	email := "N/A"
 	nameUser := "N/A"
 	statusTok := "N/A"
@@ -199,8 +199,8 @@ func cmdNext() {
 		return
 	}
 
-	_, tokenPath, _, _, _, _, _ := getPaths()
-	info, _ := readTokenInfo(tokenPath)
+	paths := getPaths()
+	info, _ := readTokenInfo(paths.TokenPath)
 	email := "N/A"
 	if info != nil {
 		email = info.Email
@@ -613,13 +613,13 @@ func cmdLoginNew(name string) {
 		return
 	}
 
-	cliHome, tokenPath, profilesDir, currentFile, _, _, _ := getPaths()
-	tempActiveBak := filepath.Join(cliHome, fmt.Sprintf("active_before_new_%d", time.Now().Unix()))
+	paths := getPaths()
+	tempActiveBak := filepath.Join(paths.CLIHome, fmt.Sprintf("active_before_new_%d", time.Now().Unix()))
 
 	// Backup current token file & current Keychain entry
 	hadActiveFile := false
-	if _, err := os.Stat(tokenPath); err == nil {
-		_ = copyFile(tokenPath, tempActiveBak, 0600)
+	if _, err := os.Stat(paths.TokenPath); err == nil {
+		_ = copyFile(paths.TokenPath, tempActiveBak, 0600)
 		hadActiveFile = true
 	}
 	keychainBackup := getKeychainPassword()
@@ -629,7 +629,7 @@ func cmdLoginNew(name string) {
 	cleanupRollback := func() {
 		if !loginCompleted {
 			if hadActiveFile {
-				_ = copyFile(tempActiveBak, tokenPath, 0600)
+				_ = copyFile(tempActiveBak, paths.TokenPath, 0600)
 				_ = os.Remove(tempActiveBak)
 			}
 			if keychainBackup != "" {
@@ -651,7 +651,7 @@ func cmdLoginNew(name string) {
 	defer signal.Stop(sigChan)
 
 	// Temporarily clear credentials so agy starts genuine Google login
-	_ = os.Remove(tokenPath)
+	_ = os.Remove(paths.TokenPath)
 	_ = deleteKeychainPassword()
 
 	fmt.Println()
@@ -671,24 +671,24 @@ func cmdLoginNew(name string) {
 	newKeychain := getKeychainPassword()
 	hasNewKeychain := (newKeychain != "")
 	hasFile := false
-	if fi, err := os.Stat(tokenPath); err == nil && fi.Size() > 0 {
+	if fi, err := os.Stat(paths.TokenPath); err == nil && fi.Size() > 0 {
 		hasFile = true
 	}
 
 	if hasFile || hasNewKeychain {
-		targetPath := filepath.Join(profilesDir, name+".json")
+		targetPath := filepath.Join(paths.ProfilesDir, name+".json")
 		email := "N/A"
 
 		if hasFile {
 			// Token file on disk was written by agy and contains the full OIDC id_token
-			_ = copyFile(tokenPath, targetPath, 0600)
-			info, _ := readTokenInfo(tokenPath)
+			_ = copyFile(paths.TokenPath, targetPath, 0600)
+			info, _ := readTokenInfo(paths.TokenPath)
 			if info != nil {
 				email = info.Email
 			}
 			// Sync keychain from file
 			var tokFile OAuthTokenFile
-			data, _ := os.ReadFile(tokenPath)
+			data, _ := os.ReadFile(paths.TokenPath)
 			if err := json.Unmarshal(data, &tokFile); err == nil {
 				_ = syncKeychainFromTokenFile(tokFile, email)
 			}
@@ -698,7 +698,7 @@ func cmdLoginNew(name string) {
 			if err == nil && tokFile != nil {
 				data, _ := json.MarshalIndent(tokFile, "", "  ")
 				_ = os.WriteFile(targetPath, data, 0600)
-				_ = os.WriteFile(tokenPath, data, 0600)
+				_ = os.WriteFile(paths.TokenPath, data, 0600)
 				email = emailFromKeyring
 			}
 		}
@@ -721,7 +721,7 @@ func cmdLoginNew(name string) {
 			fmt.Printf(colorize(" (Notice: %v)\n", ColorYellow), q.Err)
 		}
 
-		_ = os.WriteFile(currentFile, []byte(name), 0600)
+		_ = os.WriteFile(paths.CurrentFile, []byte(name), 0600)
 		loginCompleted = true
 		if hadActiveFile {
 			_ = os.Remove(tempActiveBak)
@@ -737,8 +737,8 @@ func cmdLoginNew(name string) {
 
 func cmdRemove(name string) {
 	name = sanitizeName(name)
-	_, _, profilesDir, currentFile, _, _, _ := getPaths()
-	target := filepath.Join(profilesDir, name+".json")
+	paths := getPaths()
+	target := filepath.Join(paths.ProfilesDir, name+".json")
 
 	if _, err := os.Stat(target); os.IsNotExist(err) {
 		fmt.Println(colorize(fmt.Sprintf("❌ Profile not found: %s", name), ColorRed))
@@ -753,9 +753,9 @@ func cmdRemove(name string) {
 		clearProfileCooldown(name)
 
 		// Remove .current if it points to the deleted profile to prevent stale reference
-		if b, err := os.ReadFile(currentFile); err == nil {
+		if b, err := os.ReadFile(paths.CurrentFile); err == nil {
 			if strings.TrimSpace(string(b)) == name {
-				_ = os.Remove(currentFile)
+				_ = os.Remove(paths.CurrentFile)
 			}
 		}
 
@@ -784,9 +784,9 @@ func cmdRename(oldName, newName string) {
 		return
 	}
 
-	_, _, profilesDir, currentFile, _, _, _ := getPaths()
-	oldPath := filepath.Join(profilesDir, oldName+".json")
-	newPath := filepath.Join(profilesDir, newName+".json")
+	paths := getPaths()
+	oldPath := filepath.Join(paths.ProfilesDir, oldName+".json")
+	newPath := filepath.Join(paths.ProfilesDir, newName+".json")
 
 	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
 		fmt.Println(colorize(fmt.Sprintf("❌ Profile '%s' not found.", oldName), ColorRed))
@@ -805,9 +805,9 @@ func cmdRename(oldName, newName string) {
 	}
 
 	// Update .current if this was the active profile
-	if b, err := os.ReadFile(currentFile); err == nil {
+	if b, err := os.ReadFile(paths.CurrentFile); err == nil {
 		if strings.TrimSpace(string(b)) == oldName {
-			_ = os.WriteFile(currentFile, []byte(newName), 0600)
+			_ = os.WriteFile(paths.CurrentFile, []byte(newName), 0600)
 		}
 	}
 
@@ -969,7 +969,10 @@ func main() {
 	case "cooldown":
 		cmdCooldown(args[1:])
 	case "watch":
-		cmdWatch(args[1:])
+		fmt.Println(colorize("ℹ️  The 'watch' command has been removed and consolidated into 'agys run'.", ColorYellow))
+		fmt.Println("👉 To run with auto-failover, simply use: " + colorize("agys run", ColorBold+ColorCyan))
+		fmt.Println("👉 Or resume conversations with: " + colorize("agys conv", ColorBold+ColorCyan))
+		return
 	case "help", "--help", "-h":
 		printHelp()
 	default:
