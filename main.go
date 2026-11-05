@@ -380,31 +380,9 @@ func selectProfileInteractive(profiles []ProfileInfo) int {
 
 	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
 
-	savedState := getSttyState()
-	defer func() {
-		restoreSttyState(savedState)
-		fmt.Print("\033[?25h") // Show cursor
-	}()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-	go func() {
-		<-sigChan
-		restoreSttyState(savedState)
-		fmt.Print("\033[?25h\r\n")
-		os.Exit(1)
-	}()
-
-	_ = exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1").Run()
-	fmt.Print("\033[?25l") // Hide cursor
-
 	totalLines := len(profiles) + 6
 
-	render := func(firstRender bool) {
-		if !firstRender {
-			fmt.Printf("\033[%dA\r", totalLines)
-		}
+	render := func(selectedIdx int) {
 
 		fmt.Print(colorize("📋 SELECT AGY ACCOUNT", ColorBold+ColorCyan) + "\033[K\r\n")
 		fmt.Print(colorize(strings.Repeat("═", 86), ColorDim) + "\033[K\r\n")
@@ -468,83 +446,7 @@ func selectProfileInteractive(profiles []ProfileInfo) int {
 		fmt.Print(helpText + "\033[K\r\n")
 	}
 
-	render(true)
-
-	buf := make([]byte, 16)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return -1
-		}
-		if n == 0 {
-			continue
-		}
-
-		if n == 1 {
-			b := buf[0]
-			switch b {
-			case 3, 27, 'q', 'Q':
-				return -1
-			case 10, 13, ' ':
-				return selectedIdx
-			case 'k', 'K':
-				if selectedIdx > 0 {
-					selectedIdx--
-				} else {
-					selectedIdx = len(profiles) - 1
-				}
-				render(false)
-			case 'j', 'J':
-				if selectedIdx < len(profiles)-1 {
-					selectedIdx++
-				} else {
-					selectedIdx = 0
-				}
-				render(false)
-			case 'g':
-				selectedIdx = 0
-				render(false)
-			case 'G':
-				selectedIdx = len(profiles) - 1
-				render(false)
-			default:
-				if b >= '1' && b <= '9' {
-					num := int(b - '0')
-					if num <= len(profiles) {
-						return num - 1
-					}
-				}
-			}
-			continue
-		}
-
-		if buf[0] == 27 {
-			if n >= 3 && (buf[1] == '[' || buf[1] == 'O') {
-				switch buf[2] {
-				case 'A': // Up
-					if selectedIdx > 0 {
-						selectedIdx--
-					} else {
-						selectedIdx = len(profiles) - 1
-					}
-					render(false)
-				case 'B': // Down
-					if selectedIdx < len(profiles)-1 {
-						selectedIdx++
-					} else {
-						selectedIdx = 0
-					}
-					render(false)
-				case 'H': // Home
-					selectedIdx = 0
-					render(false)
-				case 'F': // End
-					selectedIdx = len(profiles) - 1
-					render(false)
-				}
-			}
-		}
-	}
+	return runMenu(len(profiles), selectedIdx, totalLines, render)
 }
 
 func cmdInteractive() {
@@ -556,12 +458,15 @@ func cmdInteractive() {
 
 	if isTerminalStdin() {
 		choiceIdx := selectProfileInteractive(profiles)
-		if choiceIdx < 0 {
+		if choiceIdx == -1 {
 			fmt.Println("Exited.")
 			return
 		}
-		cmdSwitch(profiles[choiceIdx].ProfileName)
-		return
+		if choiceIdx >= 0 {
+			cmdSwitch(profiles[choiceIdx].ProfileName)
+			return
+		}
+		// choiceIdx == -2: raw mode unavailable, fall through to the plain text prompt
 	}
 
 	cmdList()

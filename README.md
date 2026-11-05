@@ -262,6 +262,11 @@ To continue this conversation with auto-failover, run:
 ├── updater.go                  # Self-updater (agys update), version checker & release puller
 ├── failover.go                 # Real-time rate-limit matcher, session-pinned cooldown & auto-failover engine
 ├── switchlock.go               # Cross-process lock so concurrent windows switch accounts once
+├── menu.go                     # Shared arrow-key menu runner & escape-sequence key parser
+├── terminal_unix.go            # Raw terminal mode via termios ioctl (macOS & Linux, no stty)
+├── terminal_darwin.go          # termios ioctl request numbers (macOS)
+├── terminal_linux.go           # termios ioctl request numbers (Linux)
+├── terminal_other.go           # Raw-mode stub for other platforms (falls back to text prompt)
 ├── e2e/                        # Black-box end-to-end tests (mock agy, incl. multi-window scenarios)
 ├── install.sh                  # 1-line curl installer & local installer
 ├── Makefile                    # make build, make install, make clean

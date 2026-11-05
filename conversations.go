@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -140,49 +138,6 @@ func truncateString(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-func getSttyState() string {
-	cmd := exec.Command("stty", "-g")
-	cmd.Stdin = os.Stdin
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func setRawMode() error {
-	cmd := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "1")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	if err := cmd.Run(); err == nil {
-		return nil
-	}
-	cmdFallback := exec.Command("stty", "cbreak", "-echo")
-	cmdFallback.Stdin = os.Stdin
-	cmdFallback.Stdout = os.Stdout
-	return cmdFallback.Run()
-}
-
-func restoreSttyState(state string) {
-	var cmd *exec.Cmd
-	if state != "" {
-		cmd = exec.Command("stty", state)
-	} else {
-		cmd = exec.Command("stty", "sane")
-	}
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	_ = cmd.Run()
-}
-
-func isTerminalStdin() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
-
 func selectConversationInteractive(convs []ConversationSummary, activeID string, isAll bool, targetDir string) int {
 	if len(convs) == 0 {
 		return -1
@@ -198,35 +153,9 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 		}
 	}
 
-	savedState := getSttyState()
-	if err := setRawMode(); err != nil {
-		return -2 // Raw mode failed, fallback to standard prompt
-	}
-
-	defer func() {
-		restoreSttyState(savedState)
-		fmt.Print("\033[?25h") // Show cursor
-	}()
-
-	// Guarantee clean restore on OS interrupt
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-	go func() {
-		<-sigChan
-		restoreSttyState(savedState)
-		fmt.Print("\033[?25h\r\n")
-		os.Exit(1)
-	}()
-
-	fmt.Print("\033[?25l") // Hide cursor
-
 	totalLines := len(convs) + 7
 
-	render := func(firstRender bool) {
-		if !firstRender {
-			fmt.Printf("\033[%dA\r", totalLines)
-		}
+	render := func(selectedIdx int) {
 
 		if isAll {
 			fmt.Print(colorize("💬 ALL RECENT AGY CONVERSATIONS", ColorBold+ColorCyan) + "\033[K\r\n")
@@ -299,111 +228,7 @@ func selectConversationInteractive(convs []ConversationSummary, activeID string,
 		fmt.Print(helpText + "\033[K\r\n")
 	}
 
-	render(true)
-
-	buf := make([]byte, 32)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return -1
-		}
-		if n == 0 {
-			continue
-		}
-
-		// Single byte key
-		if n == 1 {
-			b := buf[0]
-			switch b {
-			case 3, 27, 'q', 'Q': // Ctrl+C, Esc, q
-				return -1
-			case 10, 13, ' ': // Enter, Space
-				return selectedIdx
-			case 16, 'k', 'K': // Ctrl+P, vim up
-				if selectedIdx > 0 {
-					selectedIdx--
-				} else {
-					selectedIdx = len(convs) - 1
-				}
-				render(false)
-			case 14, 'j', 'J': // Ctrl+N, vim down
-				if selectedIdx < len(convs)-1 {
-					selectedIdx++
-				} else {
-					selectedIdx = 0
-				}
-				render(false)
-			case 'g': // top
-				selectedIdx = 0
-				render(false)
-			case 'G': // bottom
-				selectedIdx = len(convs) - 1
-				render(false)
-			default:
-				if b >= '1' && b <= '9' {
-					num := int(b - '0')
-					if num <= len(convs) {
-						return num - 1 // immediate select
-					}
-				}
-			}
-			continue
-		}
-
-		// Multi-byte sequence (arrow keys, home, end, page up/down)
-		for i := 0; i < n; i++ {
-			if buf[i] == 27 && i+2 < n && (buf[i+1] == '[' || buf[i+1] == 'O') {
-				switch buf[i+2] {
-				case 'A': // Up
-					if selectedIdx > 0 {
-						selectedIdx--
-					} else {
-						selectedIdx = len(convs) - 1
-					}
-					render(false)
-					i += 2
-				case 'B': // Down
-					if selectedIdx < len(convs)-1 {
-						selectedIdx++
-					} else {
-						selectedIdx = 0
-					}
-					render(false)
-					i += 2
-				case 'H': // Home
-					selectedIdx = 0
-					render(false)
-					i += 2
-				case 'F': // End
-					selectedIdx = len(convs) - 1
-					render(false)
-					i += 2
-				case '5': // Page Up
-					selectedIdx -= 5
-					if selectedIdx < 0 {
-						selectedIdx = 0
-					}
-					render(false)
-					if i+3 < n && buf[i+3] == '~' {
-						i += 3
-					} else {
-						i += 2
-					}
-				case '6': // Page Down
-					selectedIdx += 5
-					if selectedIdx >= len(convs) {
-						selectedIdx = len(convs) - 1
-					}
-					render(false)
-					if i+3 < n && buf[i+3] == '~' {
-						i += 3
-					} else {
-						i += 2
-					}
-				}
-			}
-		}
-	}
+	return runMenu(len(convs), selectedIdx, totalLines, render)
 }
 
 func printConversationsTable(convs []ConversationSummary, activeID string, isAll bool, targetDir string) {
