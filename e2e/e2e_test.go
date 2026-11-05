@@ -1,7 +1,11 @@
 package e2e
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -918,4 +922,180 @@ func TestE2E_Utility_VersionAndHelp(t *testing.T) {
 // Helper to write string to file
 func writeTokenFile(path string, content string) error {
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+const twoWindows429Line = "E1031 20:49:52.880403 3946 errorreport.go:224] agent executor error: generating and executing: RESOURCE_EXHAUSTED (code 429): Individual quota reached."
+
+// runTwoWindows starts two `agys run` windows against the same HOME (shared token, profiles,
+// cooldowns — like two terminals on one machine). Exactly one window hits a 429 in its own agy
+// log. The other window must be left completely alone.
+func runTwoWindows(t *testing.T, firstWindowHits429 bool) {
+	h := NewHarness(t)
+	for i, name := range []string{"acc1", "acc2", "acc3"} {
+		if err := h.CreateFakeGoogleAccount(name, fmt.Sprintf("%d@gmail.com", i+1), name, fmt.Sprint(i+1)); err != nil {
+			t.Fatalf("Failed to create profile: %v", err)
+		}
+	}
+	_ = h.SetActiveAccount("acc1")
+
+	calm := []AgyTurn{{Stdout: "calm window working\n", Delay: 7 * time.Second}}
+	failing := []AgyTurn{
+		{Stdout: "failing window start\n", CliLog: twoWindows429Line, CliLogDelay: 3 * time.Second, Delay: 9 * time.Second},
+		{Stdout: "failing window resumed\n", ExitCode: 0},
+	}
+
+	first, second := calm, failing
+	if firstWindowHits429 {
+		first, second = failing, calm
+	}
+	winA := h.NewMockSession("A", first)
+	winB := h.NewMockSession("B", second)
+
+	runA := h.StartAgys(winA, "run")
+	time.Sleep(1500 * time.Millisecond) // window B opens later, like a new terminal
+	runB := h.StartAgys(winB, "run")
+
+	outA, errA, codeA := runA.Wait(40 * time.Second)
+	outB, errB, codeB := runB.Wait(40 * time.Second)
+	if codeA != 0 || codeB != 0 {
+		t.Fatalf("windows did not exit cleanly: A=%d B=%d\nA out: %s\nA err: %s\nB out: %s\nB err: %s", codeA, codeB, outA, errA, outB, errB)
+	}
+
+	failingSess, calmSess := winB, winA
+	calmOut, failingOut := outA, outB
+	if firstWindowHits429 {
+		failingSess, calmSess = winA, winB
+		calmOut, failingOut = outB, outA
+	}
+
+	if n := len(failingSess.Executions()); n != 2 {
+		t.Errorf("window that hit the 429 should fail over and resume (2 agy launches), got %d\nOutput: %s", n, failingOut)
+	}
+	if n := len(calmSess.Executions()); n != 1 {
+		t.Errorf("calm window must not be restarted by the other window's 429 (want 1 agy launch), got %d\nOutput: %s", n, calmOut)
+	}
+	if strings.Contains(calmOut, "Rate limit encountered") {
+		t.Errorf("calm window reacted to a rate limit that was not its own:\n%s", calmOut)
+	}
+}
+
+// TestE2E_Runner_TwoWindows_LaterWindowRateLimit: a window opened later gets a 429; the earlier one must not react.
+func TestE2E_Runner_TwoWindows_LaterWindowRateLimit(t *testing.T) {
+	runTwoWindows(t, false)
+}
+
+// TestE2E_Runner_TwoWindows_EarlierWindowRateLimit: the earlier window gets a 429 while a later one is open;
+// the earlier window must still detect its own error and the later one must not react.
+func TestE2E_Runner_TwoWindows_EarlierWindowRateLimit(t *testing.T) {
+	runTwoWindows(t, true)
+}
+
+// cooldownNames returns the profile names that currently have a cooldown entry.
+func cooldownNames(h *Harness) []string {
+	data, err := os.ReadFile(filepath.Join(h.ProfilesDir, ".cooldown.json"))
+	if err != nil {
+		return nil
+	}
+	m := map[string]int64{}
+	_ = json.Unmarshal(data, &m)
+	var names []string
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TestE2E_Runner_TwoWindows_CooldownPinnedToSessionAccount: window A starts on acc1, then the machine moves
+// to acc2 (window B's account). When A hits a 429, acc1 — the account A actually used — must be cooled down.
+// acc2 (healthy, used by B) must not be cooled down or switched away from, and B must be left alone.
+func TestE2E_Runner_TwoWindows_CooldownPinnedToSessionAccount(t *testing.T) {
+	h := NewHarness(t)
+	for i, name := range []string{"acc1", "acc2", "acc3"} {
+		if err := h.CreateFakeGoogleAccount(name, fmt.Sprintf("%d@gmail.com", i+1), name, fmt.Sprint(i+1)); err != nil {
+			t.Fatalf("Failed to create profile: %v", err)
+		}
+	}
+	_ = h.SetActiveAccount("acc1")
+
+	winA := h.NewMockSession("A", []AgyTurn{
+		{Stdout: "A working\n", CliLog: twoWindows429Line, CliLogDelay: 3 * time.Second, Delay: 9 * time.Second},
+		{Stdout: "A resumed\n", ExitCode: 0},
+	})
+	winB := h.NewMockSession("B", []AgyTurn{{Stdout: "B working\n", Delay: 8 * time.Second}})
+
+	runA := h.StartAgys(winA, "run")
+	time.Sleep(1 * time.Second)
+	_ = h.SetActiveAccount("acc2") // the machine is now on B's account
+	runB := h.StartAgys(winB, "run")
+
+	outA, errA, codeA := runA.Wait(40 * time.Second)
+	outB, errB, codeB := runB.Wait(40 * time.Second)
+	if codeA != 0 || codeB != 0 {
+		t.Fatalf("windows did not exit cleanly: A=%d B=%d\nA out: %s\nA err: %s\nB out: %s\nB err: %s", codeA, codeB, outA, errA, outB, errB)
+	}
+
+	if got := cooldownNames(h); len(got) != 1 || got[0] != "acc1" {
+		t.Errorf("cooldown must be on the account window A used (acc1) and nothing else, got %v", got)
+	}
+	if active, _ := h.GetActiveProfileName(); active != "acc2" {
+		t.Errorf("machine should stay on healthy acc2, got %q", active)
+	}
+	execsA := winA.Executions()
+	if len(execsA) != 2 {
+		t.Fatalf("window A should fail over and resume (2 launches), got %d", len(execsA))
+	}
+	if !strings.Contains(execsA[1].ActiveToken, "fake-acc2-") {
+		t.Errorf("window A should resume on acc2, token was: %s", execsA[1].ActiveToken)
+	}
+	if n := len(winB.Executions()); n != 1 {
+		t.Errorf("window B must not be restarted, got %d launches\nB out: %s", n, outB)
+	}
+}
+
+// TestE2E_Runner_TwoWindows_SameAccount_SingleSwitch: two windows on the same account both hit a 429 at
+// about the same time. The machine must switch exactly once: both resume on the same new account, and
+// only the exhausted account is cooled down (no second window cooling down / abandoning the new account).
+func TestE2E_Runner_TwoWindows_SameAccount_SingleSwitch(t *testing.T) {
+	h := NewHarness(t)
+	for i, name := range []string{"acc1", "acc2", "acc3"} {
+		if err := h.CreateFakeGoogleAccount(name, fmt.Sprintf("%d@gmail.com", i+1), name, fmt.Sprint(i+1)); err != nil {
+			t.Fatalf("Failed to create profile: %v", err)
+		}
+	}
+	_ = h.SetActiveAccount("acc1")
+
+	failing := func() []AgyTurn {
+		return []AgyTurn{
+			{Stdout: "working\n", CliLog: twoWindows429Line, CliLogDelay: 2 * time.Second, Delay: 12 * time.Second},
+			{Stdout: "resumed\n", ExitCode: 0},
+		}
+	}
+	winA := h.NewMockSession("A", failing())
+	winB := h.NewMockSession("B", failing())
+
+	runA := h.StartAgys(winA, "run")
+	time.Sleep(300 * time.Millisecond)
+	runB := h.StartAgys(winB, "run")
+
+	outA, errA, codeA := runA.Wait(60 * time.Second)
+	outB, errB, codeB := runB.Wait(60 * time.Second)
+	if codeA != 0 || codeB != 0 {
+		t.Fatalf("windows did not exit cleanly: A=%d B=%d\nA out: %s\nA err: %s\nB out: %s\nB err: %s", codeA, codeB, outA, errA, outB, errB)
+	}
+
+	execsA, execsB := winA.Executions(), winB.Executions()
+	if len(execsA) != 2 || len(execsB) != 2 {
+		t.Fatalf("both windows should fail over once and resume (2 launches each), got A=%d B=%d", len(execsA), len(execsB))
+	}
+	tokA, tokB := execsA[1].ActiveToken, execsB[1].ActiveToken
+	if strings.Contains(tokA, "fake-acc1-") || strings.Contains(tokB, "fake-acc1-") {
+		t.Errorf("a window resumed on the exhausted account acc1")
+	}
+	if tokA != tokB {
+		t.Errorf("windows resumed on different accounts (double switch):\nA: %s\nB: %s", tokA, tokB)
+	}
+	if got := cooldownNames(h); len(got) != 1 || got[0] != "acc1" {
+		t.Errorf("only the exhausted account acc1 should be cooled down, got %v", got)
+	}
 }

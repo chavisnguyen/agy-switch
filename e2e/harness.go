@@ -17,11 +17,13 @@ import (
 
 // AgyTurn defines how the mock agy binary behaves on a particular execution turn.
 type AgyTurn struct {
-	Stdout   string        `json:"stdout"`
-	Stderr   string        `json:"stderr"`
-	CliLog   string        `json:"cli_log"`
-	ExitCode int           `json:"exit_code"`
-	Delay    time.Duration `json:"delay"`
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+	CliLog string `json:"cli_log"`
+	// CliLogDelay postpones writing CliLog (on top of the default 200ms) so it can land after other windows opened.
+	CliLogDelay time.Duration `json:"cli_log_delay"`
+	ExitCode    int           `json:"exit_code"`
+	Delay       time.Duration `json:"delay"`
 }
 
 // AgyExecRecord records how mock agy was invoked by agys.
@@ -133,6 +135,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -141,6 +144,7 @@ type AgyTurn struct {
 	Stdout   string        ` + "`json:\"stdout\"`" + `
 	Stderr   string        ` + "`json:\"stderr\"`" + `
 	CliLog   string        ` + "`json:\"cli_log\"`" + `
+	CliLogDelay time.Duration ` + "`json:\"cli_log_delay\"`" + `
 	ExitCode int           ` + "`json:\"exit_code\"`" + `
 	Delay    time.Duration ` + "`json:\"delay\"`" + `
 }
@@ -207,10 +211,26 @@ func main() {
 		_ = os.WriteFile(stateFile, stateBytes, 0644)
 	}
 
-	// If turn has cli_log, append to cli.log after a brief delay so tailer is active
+	// Like the real agy, honor --log-file: write this session's log there instead of the shared cli.log
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--log-file=") {
+			cliLogFile = strings.TrimPrefix(args[i], "--log-file=")
+		} else if args[i] == "--log-file" && i+1 < len(args) {
+			cliLogFile = args[i+1]
+		}
+	}
+	// Real agy creates its log file at startup
+	if cliLogFile != "" {
+		if f, err := os.OpenFile(cliLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+			_ = f.Close()
+		}
+	}
+
+	// If turn has cli_log, append to the log after a brief delay so tailer is active
 	if turn.CliLog != "" && cliLogFile != "" {
 		go func() {
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(200*time.Millisecond + turn.CliLogDelay)
 			f, err := os.OpenFile(cliLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err == nil {
 				_, _ = f.WriteString(turn.CliLog + "\n")
@@ -399,4 +419,96 @@ func (h *Harness) RunAgysWithInput(input string, timeout time.Duration, args ...
 	}
 
 	return stdout, stderr, exitCode, err
+}
+
+// MockSession is an independent mock-agy script (turn state + execution log). Several
+// sessions can run at once against the same HOME, like several terminal windows.
+type MockSession struct {
+	StateFile   string
+	ExecLogFile string
+}
+
+// NewMockSession creates an isolated mock-agy script that does not interfere with others.
+func (h *Harness) NewMockSession(name string, turns []AgyTurn) *MockSession {
+	s := &MockSession{
+		StateFile:   filepath.Join(h.TempDir, "mock_agy_state_"+name+".json"),
+		ExecLogFile: filepath.Join(h.TempDir, "mock_agy_exec_log_"+name+".json"),
+	}
+	state := struct {
+		CurrentTurn int       `json:"current_turn"`
+		Turns       []AgyTurn `json:"turns"`
+	}{Turns: turns}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		h.T.Fatalf("Failed to marshal mock turns: %v", err)
+	}
+	if err := os.WriteFile(s.StateFile, data, 0644); err != nil {
+		h.T.Fatalf("Failed to write mock state: %v", err)
+	}
+	_ = os.WriteFile(s.ExecLogFile, []byte("[]"), 0644)
+	return s
+}
+
+// Executions returns every recorded invocation of this session's mock agy.
+func (s *MockSession) Executions() []AgyExecRecord {
+	data, err := os.ReadFile(s.ExecLogFile)
+	if err != nil {
+		return nil
+	}
+	var records []AgyExecRecord
+	_ = json.Unmarshal(data, &records)
+	return records
+}
+
+// RunningAgys is an agys process started in the background.
+type RunningAgys struct {
+	cmd    *exec.Cmd
+	stdout bytes.Buffer
+	stderr bytes.Buffer
+	done   chan error
+}
+
+// StartAgys launches agys without waiting for it, using the given mock session.
+func (h *Harness) StartAgys(s *MockSession, args ...string) *RunningAgys {
+	r := &RunningAgys{done: make(chan error, 1)}
+	r.cmd = exec.Command(h.AgysBin, args...)
+	r.cmd.Dir = h.TempDir
+	pathEnv := fmt.Sprintf("%s:%s", h.BinDir, os.Getenv("PATH"))
+	r.cmd.Env = append(os.Environ(),
+		"HOME="+h.TempDir,
+		"PATH="+pathEnv,
+		"MOCK_AGY_STATE="+h.StateFile,
+		"MOCK_AGY_EXEC_LOG="+h.ExecLogFile,
+		"MOCK_AGY_CLI_LOG="+h.CliLogPath,
+		"MOCK_AGY_TOKEN_FILE="+h.TokenPath,
+		// Later duplicates win: point this window at its own script
+		"MOCK_AGY_STATE="+s.StateFile,
+		"MOCK_AGY_EXEC_LOG="+s.ExecLogFile,
+	)
+	r.cmd.Stdout = &r.stdout
+	r.cmd.Stderr = &r.stderr
+	if err := r.cmd.Start(); err != nil {
+		h.T.Fatalf("Failed to start agys: %v", err)
+	}
+	go func() { r.done <- r.cmd.Wait() }()
+	return r
+}
+
+// Wait blocks until agys exits (or the timeout kills it) and returns its output and exit code.
+func (r *RunningAgys) Wait(timeout time.Duration) (stdout, stderr string, exitCode int) {
+	select {
+	case err := <-r.done:
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				exitCode = -1
+			}
+		}
+	case <-time.After(timeout):
+		_ = r.cmd.Process.Kill()
+		<-r.done
+		exitCode = -2
+	}
+	return r.stdout.String(), r.stderr.String(), exitCode
 }

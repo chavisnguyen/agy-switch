@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -118,5 +119,35 @@ func TestIsNewerVersion(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("isNewerVersion(%q, %q) = %v; want %v", tt.current, tt.latest, got, tt.expected)
 		}
+	}
+}
+
+func TestExtractLogFileArg(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"-p", "hello"}, ""},
+		{[]string{"--log-file", "/tmp/a.log"}, "/tmp/a.log"},
+		{[]string{"--model", "x", "--log-file=/tmp/b.log", "-p", "hi"}, "/tmp/b.log"},
+		{[]string{"-log-file", "/tmp/c.log"}, "/tmp/c.log"},
+		{[]string{"--log-file"}, ""}, // dangling flag, no value
+	}
+	for _, c := range cases {
+		if got := extractLogFileArg(c.args); got != c.want {
+			t.Errorf("extractLogFileArg(%v) = %q, want %q", c.args, got, c.want)
+		}
+	}
+}
+
+func TestNewRunLogPathIsUniquePerAttempt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // never touch the real ~/.gemini
+	a, b := newRunLogPath(1), newRunLogPath(2)
+	if a == b {
+		t.Errorf("expected distinct log paths per attempt, got %q twice", a)
+	}
+	if !strings.Contains(a, "agys-run-") {
+		t.Errorf("unexpected log path %q", a)
 	}
 }

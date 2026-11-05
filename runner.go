@@ -19,6 +19,37 @@ import (
 
 var convUUIDRegex = regexp.MustCompile(`(?i)(?:Streaming conversation|Resuming conversation|Created conversation|Starting conversation update stream for|found conversation[:\s]+|conversation(?:_id)?[:\s=]+|cascade_id[:=]|--conversation[= ])\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
 
+// runLogWaitBeforeFallback is how long we wait for agy to create the --log-file we asked
+// for before assuming it ignored the flag.
+const runLogWaitBeforeFallback = 5 * time.Second
+
+// extractLogFileArg returns the value of a user-supplied --log-file / -log-file argument
+// (both "--log-file path" and "--log-file=path" forms), or "" if absent.
+func extractLogFileArg(args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		for _, prefix := range []string{"--log-file=", "-log-file="} {
+			if strings.HasPrefix(a, prefix) {
+				return strings.TrimPrefix(a, prefix)
+			}
+		}
+		if (a == "--log-file" || a == "-log-file") && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// newRunLogPath returns a log path unique to this agys process and attempt, so concurrent
+// `agys run` windows never share a log file. The "agys-run-" prefix keeps it clear of
+// agy's own cli-*.log naming.
+func newRunLogPath(attempt int) string {
+	paths := getPaths()
+	dir := filepath.Join(paths.CLIHome, "log")
+	_ = os.MkdirAll(dir, 0700)
+	return filepath.Join(dir, fmt.Sprintf("agys-run-%s-%d-%d.log", time.Now().Format("20060102_150405"), os.Getpid(), attempt))
+}
+
 func hasContinueFlag(args []string) bool {
 	for _, a := range args {
 		if a == "-c" || a == "--continue" {
@@ -223,6 +254,28 @@ func cmdRun(customArgs []string) {
 			}
 		}
 
+		// Give this agy process its own log file so the failover monitor only ever reads
+		// the log of the session it launched. Following the shared cli.log symlink makes
+		// every running `agys run` tail the most recently started agy of ANY window.
+		// The flag goes first: agy uses Go-style flag parsing, which stops at the first
+		// positional argument.
+		runLogPath := extractLogFileArg(cmdArgs)
+		if runLogPath == "" {
+			runLogPath = newRunLogPath(attempt)
+			cmdArgs = append([]string{"--log-file", runLogPath}, cmdArgs...)
+		}
+		var runLogStartOffset int64
+		if fi, err := os.Stat(runLogPath); err == nil {
+			runLogStartOffset = fi.Size() // user-supplied file may already hold old lines
+		}
+		launchedAt := time.Now()
+
+		// Pin the account this agy session starts on. The machine-wide active account can change
+		// underneath a running session (another window switching), so failover must cool down the
+		// account this session actually used, not whatever is active when the error shows up.
+		sessionProfile := currentActiveProfileName()
+
+		// Only used if agy ignores --log-file and we have to fall back to the shared symlink.
 		preLaunchLogFile := getActiveLogFilePath()
 
 		cmd := exec.Command("agy", cmdArgs...)
@@ -267,6 +320,7 @@ func cmdRun(customArgs []string) {
 			var currentPath string
 			var reader *bufio.Reader
 			var partialLine strings.Builder
+			followSymlink := false
 
 			defer func() {
 				if currentLogFile != nil {
@@ -281,7 +335,17 @@ func cmdRun(customArgs []string) {
 				default:
 				}
 
-				resolved := getActiveLogFilePath()
+				resolved := runLogPath
+				if followSymlink {
+					resolved = getActiveLogFilePath()
+				} else if currentLogFile == nil && time.Since(launchedAt) > runLogWaitBeforeFallback {
+					if _, err := os.Stat(runLogPath); err != nil {
+						// agy did not honor --log-file: fall back to the shared symlink (old behavior)
+						followSymlink = true
+						resolved = getActiveLogFilePath()
+						fmt.Print(colorize("⚠️  agy did not create the requested --log-file; falling back to the shared cli.log (failover may react to other agy windows).", ColorYellow) + "\r\n")
+					}
+				}
 
 				// If log path changed (agy rotated to a new session log), open the new file
 				if resolved != currentPath || currentLogFile == nil {
@@ -300,7 +364,11 @@ func cmdRun(customArgs []string) {
 					// If this is a pre-existing log file from previous session/attempt, seek to end
 					// so we only monitor fresh lines and never re-read stale errors.
 					// If agy rotated to a new session log file for this run, read from the beginning.
-					if resolved == preLaunchLogFile {
+					if !followSymlink {
+						// Our own per-run log: read everything agy writes from the start
+						// (skipping only content that existed before launch).
+						_, _ = currentLogFile.Seek(runLogStartOffset, io.SeekStart)
+					} else if resolved == preLaunchLogFile {
 						_, _ = currentLogFile.Seek(0, io.SeekEnd)
 					} else {
 						_, _ = currentLogFile.Seek(0, io.SeekStart)
@@ -430,7 +498,7 @@ func cmdRun(customArgs []string) {
 		mu.Lock()
 		errLine := lastErrorLine
 		mu.Unlock()
-		handleRateLimitTrigger(errLine)
+		handleRateLimitTrigger(errLine, sessionProfile)
 
 		time.Sleep(1 * time.Second)
 	}
