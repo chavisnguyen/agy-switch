@@ -207,10 +207,19 @@ agys run --conversation=5af43360-c5c2-4331-98e9-7a65630a90fb
 ```
 
 ### What happens when you hit a Rate Limit?
-1. `agys` catches the 429 / `RESOURCE_EXHAUSTED` error in real-time.
-2. Puts the exhausted account into a 30-minute cooldown.
+1. `agys` catches the 429 / `RESOURCE_EXHAUSTED` error in real-time, from the log of the `agy` session it launched.
+2. Puts the account that session was using into a 30-minute cooldown.
 3. Automatically rotates tokens to the next healthy account.
 4. Auto-resumes your conversation with `--continue` — **your coding session continues without losing state or context!**
+
+### Running multiple windows
+You can run `agys run` in several terminals at once. Each window is handled independently:
+
+- **Own log per window**: `agys` starts `agy` with its own `--log-file` (`~/.gemini/antigravity-cli/log/agys-run-*.log`) and only watches that file, so one window's 429 never restarts another window. Tail `agys-run-*.log` (not `cli.log`) to follow these sessions. If your `agy` ignores `--log-file`, `agys` prints a warning and falls back to the shared `cli.log`.
+- **Cooldown goes to the right account**: `agys` remembers which account each session started with and cools down that account, even if another window has since switched the machine to a different one.
+- **One switch at a time**: account switches are serialized with a lock (`profiles/.switch.lock`). If a window finds that another window already moved the machine to a healthy account, it resumes on that account instead of switching again.
+
+> ⚠️ The active account is machine-wide (one token file and one Keychain entry), so windows tend to converge on the same account after a failover. Separate accounts per window are not supported.
 
 ### Dynamic Tab Title Sync
 When running `agys run`, your terminal tab title automatically reflects the conversation's real topic name (e.g., `Building MCP Server`) instead of generic command strings. Compatible with CMUX, Ghostty, iTerm2, and macOS Terminal.
@@ -248,10 +257,12 @@ To continue this conversation with auto-failover, run:
 ├── profiles.go                 # Profile storage, JWT decode, atomic swap & Keychain sync
 ├── quota.go                    # Parallel quota inspection & 5h vs Weekly Cap optimizer
 ├── quota_test.go               # Tests for 5h vs Weekly reset formatting & candidate scoring
-├── runner.go                   # Smart wrapper: 429 auto-failover, tab title sync & hints
+├── runner.go                   # Smart wrapper: per-window log, 429 auto-failover, tab title sync & hints
 ├── runner_test.go              # Tests for regex UUID parsing & argument extraction
 ├── updater.go                  # Self-updater (agys update), version checker & release puller
-├── failover.go                 # Real-time rate-limit matcher, debounce & auto-failover engine
+├── failover.go                 # Real-time rate-limit matcher, session-pinned cooldown & auto-failover engine
+├── switchlock.go               # Cross-process lock so concurrent windows switch accounts once
+├── e2e/                        # Black-box end-to-end tests (mock agy, incl. multi-window scenarios)
 ├── install.sh                  # 1-line curl installer & local installer
 ├── Makefile                    # make build, make install, make clean
 └── README.md                   # Documentation
