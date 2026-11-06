@@ -241,6 +241,11 @@ func cmdRun(customArgs []string) {
 					filtered = append(filtered, a)
 				}
 				cmdArgs = append(filtered, "--conversation="+currentID)
+				// Auto-send "continue" so the interrupted task resumes without typing.
+				// Flag goes first (Go-style flag parsing stops at the first positional arg).
+				if !hasFlag(cmdArgs, "-i", "--prompt-interactive", "-p", "--print", "--prompt") {
+					cmdArgs = append([]string{"-i", "continue"}, cmdArgs...)
+				}
 			}
 		}
 
@@ -505,4 +510,15 @@ func cmdRun(customArgs []string) {
 
 	resetTerminal()
 	fmt.Print(colorize("❌ Max retry attempts reached or all accounts exhausted.", ColorBold+ColorRed) + "\r\n")
+}
+
+func hasFlag(args []string, names ...string) bool {
+	for _, a := range args {
+		for _, n := range names {
+			if a == n || strings.HasPrefix(a, n+"=") {
+				return true
+			}
+		}
+	}
+	return false
 }
