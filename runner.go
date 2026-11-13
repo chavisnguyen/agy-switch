@@ -91,7 +91,7 @@ func getConversationTitle(convID string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
+	cmd := exec.CommandContext(ctx, "sqlite3", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -126,7 +126,7 @@ func getLatestConversationID() string {
 
 	if cwd, err := os.Getwd(); err == nil && cwd != "" {
 		query := fmt.Sprintf("SELECT conversation_id FROM conversation_summaries WHERE workspace_uris LIKE '%%%s%%' AND conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;", strings.ReplaceAll(cwd, "'", ""))
-		cmd := exec.CommandContext(ctx, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
+		cmd := exec.CommandContext(ctx, "sqlite3", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, query)
 		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
 			return strings.TrimSpace(string(out))
 		}
@@ -135,7 +135,7 @@ func getLatestConversationID() string {
 	// 3. Fallback to global latest conversation
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel2()
-	cmd2 := exec.CommandContext(ctx2, "sqlite3", "-readonly", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
+	cmd2 := exec.CommandContext(ctx2, "sqlite3", "-cmd", ".timeout 3000", "-batch", "-noheader", dbPath, "SELECT conversation_id FROM conversation_summaries WHERE conversation_id != '' ORDER BY last_modified_time DESC LIMIT 1;")
 	out, err := cmd2.Output()
 	if err != nil {
 		return ""
