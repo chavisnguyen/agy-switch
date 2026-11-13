@@ -16,9 +16,13 @@ import (
 )
 
 const (
-	oauthTokenURL  = "https://oauth2.googleapis.com/token"
-	modelsEndpoint = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-	userAgent      = "antigravity/1.0.0 darwin/arm64"
+	oauthTokenURL   = "https://oauth2.googleapis.com/token"
+	modelsEndpoint  = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+	quotaSummaryURL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+	userAgent       = "antigravity/1.0.0 darwin/arm64"
+	// quotaSummaryUserAgent must look like a recent Antigravity Hub build or the
+	// backend silently omits the "Gemini Models" bucket group from the response.
+	quotaSummaryUserAgent = "antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=1000335682)"
 )
 
 var quotaHTTPClient = &http.Client{
@@ -67,6 +71,37 @@ type ProfileQuota struct {
 	GeminiRemaining float64
 	GeminiResetTime string
 	Err             error
+
+	// Separate 5h / weekly buckets from retrieveUserQuotaSummary, best-effort.
+	// *HasSummary indicates whether that model's group was present in the response.
+	Claude5h         QuotaWindow
+	ClaudeWeekly     QuotaWindow
+	ClaudeHasSummary bool
+	Gemini5h         QuotaWindow
+	GeminiWeekly     QuotaWindow
+	GeminiHasSummary bool
+}
+
+// QuotaWindow holds a single quota bucket (either the 5h or the weekly window).
+type QuotaWindow struct {
+	Remaining float64
+	ResetTime string
+}
+
+type QuotaBucket struct {
+	BucketID          string  `json:"bucketId"`
+	Window            string  `json:"window"`
+	RemainingFraction float64 `json:"remainingFraction"`
+	ResetTime         string  `json:"resetTime"`
+}
+
+type QuotaGroup struct {
+	DisplayName string        `json:"displayName"`
+	Buckets     []QuotaBucket `json:"buckets"`
+}
+
+type QuotaSummaryResponse struct {
+	Groups []QuotaGroup `json:"groups"`
 }
 
 type ModelQuotaInfo struct {
@@ -217,7 +252,68 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 		quota.GeminiResetTime = m.QuotaInfo.ResetTime
 	}
 
+	// Best-effort: fetch the explicit 5h/weekly bucket split. If it fails (older
+	// account type, network hiccup, etc.) the fields above already carry a usable
+	// single-window fallback, so we don't surface this as a hard error.
+	if summary, err := fetchQuotaSummary(ctx, accessToken); err == nil {
+		applyQuotaSummary(&quota, summary)
+	}
+
 	return quota
+}
+
+// fetchQuotaSummary calls retrieveUserQuotaSummary, which (unlike
+// fetchAvailableModels) reports the 5h and weekly buckets separately for both
+// the Gemini group and the Claude/GPT group.
+func fetchQuotaSummary(ctx context.Context, accessToken string) (*QuotaSummaryResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", quotaSummaryURL, bytes.NewBuffer([]byte("{}")))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", quotaSummaryUserAgent)
+
+	resp, err := quotaHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("quota summary api error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var summary QuotaSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		return nil, err
+	}
+	return &summary, nil
+}
+
+// applyQuotaSummary maps the bucketId values from retrieveUserQuotaSummary
+// onto the Claude/Gemini 5h+weekly fields of a ProfileQuota.
+func applyQuotaSummary(quota *ProfileQuota, summary *QuotaSummaryResponse) {
+	for _, g := range summary.Groups {
+		for _, b := range g.Buckets {
+			w := QuotaWindow{Remaining: b.RemainingFraction, ResetTime: b.ResetTime}
+			switch b.BucketID {
+			case "3p-5h":
+				quota.Claude5h = w
+				quota.ClaudeHasSummary = true
+			case "3p-weekly":
+				quota.ClaudeWeekly = w
+				quota.ClaudeHasSummary = true
+			case "gemini-5h":
+				quota.Gemini5h = w
+				quota.GeminiHasSummary = true
+			case "gemini-weekly":
+				quota.GeminiWeekly = w
+				quota.GeminiHasSummary = true
+			}
+		}
+	}
 }
 
 func fetchAllProfilesQuota(profiles []ProfileInfo, timeout time.Duration) map[string]ProfileQuota {
@@ -309,6 +405,49 @@ func formatQuotaReset(resetStr string) string {
 		leftStr = fmt.Sprintf("%dh left", int(diff.Hours()))
 	}
 	return fmt.Sprintf(" (resets %s, %s [Weekly Cap ⚠️])", local.Format("02 Jan 15:04"), leftStr)
+}
+
+// formatBucketReset formats a reset timestamp for a bucket whose window
+// (5h vs weekly) is already known, instead of inferring it from the time
+// remaining (which formatQuotaReset does for the single-window fallback).
+func formatBucketReset(resetStr string, isWeekly bool) string {
+	if resetStr == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, resetStr)
+	if err != nil {
+		return fmt.Sprintf(" (resets %s)", resetStr)
+	}
+
+	diff := time.Until(t)
+	local := t.Local()
+
+	if !isWeekly {
+		if diff <= 0 {
+			return fmt.Sprintf(" (resets %s [5h])", local.Format("15:04"))
+		}
+		h := int(diff.Hours())
+		m := int(diff.Minutes()) % 60
+		durStr := fmt.Sprintf("in %dh%02dm", h, m)
+		if h == 0 {
+			durStr = fmt.Sprintf("in %dm", m)
+		}
+		return fmt.Sprintf(" (resets %s %s [5h])", local.Format("15:04"), durStr)
+	}
+
+	if diff <= 0 {
+		return fmt.Sprintf(" (resets %s [1w])", local.Format("02 Jan 15:04"))
+	}
+	days := int((diff + 12*time.Hour).Hours() / 24)
+	leftStr := ""
+	if days > 1 {
+		leftStr = fmt.Sprintf("%dd left", days)
+	} else if days == 1 {
+		leftStr = "1d left"
+	} else {
+		leftStr = fmt.Sprintf("%dh left", int(diff.Hours()))
+	}
+	return fmt.Sprintf(" (resets %s, %s [1w])", local.Format("02 Jan 15:04"), leftStr)
 }
 
 type SmartCandidate struct {

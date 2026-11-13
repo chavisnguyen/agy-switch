@@ -212,8 +212,33 @@ func cmdNext() {
 	fmt.Println()
 }
 
-func cmdCurrent() {
-	profiles, _ := getAllProfiles()
+// printQuotaLine prints a model's quota. When the 5h/weekly split from
+// retrieveUserQuotaSummary is available it prints both windows on two lines;
+// otherwise it falls back to the single combined window from fetchAvailableModels.
+func printQuotaLine(firstPrefix, contPrefix string, hasSummary bool, fiveH, weekly QuotaWindow, fallbackRemaining float64, fallbackResetTime string, err error) {
+	if err == nil && hasSummary {
+		fiveHStr := formatQuotaBadge(fiveH.Remaining, nil)
+		if fiveH.ResetTime != "" {
+			fiveHStr += colorize(formatBucketReset(fiveH.ResetTime, false), ColorDim)
+		}
+		fmt.Printf("%s%s\n", firstPrefix, fiveHStr)
+
+		weeklyStr := formatQuotaBadge(weekly.Remaining, nil)
+		if weekly.ResetTime != "" {
+			weeklyStr += colorize(formatBucketReset(weekly.ResetTime, true), ColorDim)
+		}
+		fmt.Printf("%s%s\n", contPrefix, weeklyStr)
+		return
+	}
+
+	str := formatQuotaBadge(fallbackRemaining, err)
+	if err == nil && fallbackResetTime != "" {
+		str += colorize(formatQuotaReset(fallbackResetTime), ColorDim)
+	}
+	fmt.Printf("%s%s\n", firstPrefix, str)
+}
+
+func cmdCurrent() {	profiles, _ := getAllProfiles()
 	if len(profiles) == 0 {
 		fmt.Println()
 		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
@@ -245,17 +270,8 @@ func cmdCurrent() {
 		fmt.Printf("%s (%s)\n", pTitle, badge)
 		fmt.Printf("    Email  : %s\n", colorize(p.Email, ColorCyan))
 
-		claudeStr := formatQuotaBadge(q.ClaudeRemaining, q.Err)
-		if q.Err == nil && q.ClaudeResetTime != "" {
-			claudeStr += colorize(formatQuotaReset(q.ClaudeResetTime), ColorDim)
-		}
-		fmt.Printf("    Claude : %s\n", claudeStr)
-
-		geminiStr := formatQuotaBadge(q.GeminiRemaining, q.Err)
-		if q.Err == nil && q.GeminiResetTime != "" {
-			geminiStr += colorize(formatQuotaReset(q.GeminiResetTime), ColorDim)
-		}
-		fmt.Printf("    Gemini : %s\n", geminiStr)
+		printQuotaLine("    Claude : ", "             ", q.ClaudeHasSummary, q.Claude5h, q.ClaudeWeekly, q.ClaudeRemaining, q.ClaudeResetTime, q.Err)
+		printQuotaLine("    Gemini : ", "             ", q.GeminiHasSummary, q.Gemini5h, q.GeminiWeekly, q.GeminiRemaining, q.GeminiResetTime, q.Err)
 
 		if idx < len(profiles)-1 {
 			fmt.Println(colorize("    "+strings.Repeat("─", 50), ColorDim))
