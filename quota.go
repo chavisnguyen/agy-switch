@@ -450,6 +450,84 @@ func formatBucketReset(resetStr string, isWeekly bool) string {
 	return fmt.Sprintf(" (resets %s, %s [1w])", local.Format("02 Jan 15:04"), leftStr)
 }
 
+// formatQuotaBar renders a fixed-width progress bar for a remaining fraction
+// (0..1), colored by severity (green/yellow/red), for compact side-by-side
+// 5h vs weekly comparison in `agys status`.
+func formatQuotaBar(remaining float64) string {
+	const barWidth = 20
+	pct := remaining * 100
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := int(pct/100*float64(barWidth) + 0.5)
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+	color := ColorGreen
+	if pct < 10 {
+		color = ColorRed
+	} else if pct < 50 {
+		color = ColorYellow
+	}
+	return colorize(bar, color)
+}
+
+// quotaStatusEmoji returns the same severity emoji used by formatQuotaBadge,
+// standalone so bar-style lines can place it next to the bar instead of the percentage.
+func quotaStatusEmoji(remaining float64) string {
+	pct := remaining * 100
+	if pct >= 50 {
+		return "🟢"
+	} else if pct > 0 {
+		return "🟡"
+	}
+	return "🔴"
+}
+
+// formatBucketResetCompact is like formatBucketReset but without the
+// "(resets ... [5h/1w])" wrapper, for use next to a bar where the window
+// label is already shown separately.
+func formatBucketResetCompact(resetStr string, isWeekly bool) string {
+	if resetStr == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, resetStr)
+	if err != nil {
+		return resetStr
+	}
+
+	diff := time.Until(t)
+	local := t.Local()
+
+	if !isWeekly {
+		if diff <= 0 {
+			return fmt.Sprintf("reset pending (%s)", local.Format("15:04"))
+		}
+		h := int(diff.Hours())
+		m := int(diff.Minutes()) % 60
+		if h > 0 {
+			return fmt.Sprintf("in %dh%02dm (%s)", h, m, local.Format("15:04"))
+		}
+		return fmt.Sprintf("in %dm (%s)", m, local.Format("15:04"))
+	}
+
+	if diff <= 0 {
+		return fmt.Sprintf("reset pending (%s)", local.Format("02 Jan"))
+	}
+	days := int((diff + 12*time.Hour).Hours() / 24)
+	if days > 1 {
+		return fmt.Sprintf("%dd left (%s)", days, local.Format("02 Jan"))
+	} else if days == 1 {
+		return fmt.Sprintf("1d left (%s)", local.Format("02 Jan"))
+	}
+	return fmt.Sprintf("%dh left (%s)", int(diff.Hours()), local.Format("02 Jan"))
+}
+
 type SmartCandidate struct {
 	Profile         ProfileInfo
 	Quota           ProfileQuota
