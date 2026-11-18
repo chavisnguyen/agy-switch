@@ -62,6 +62,12 @@ func TestConvUUIDRegex(t *testing.T) {
 		}
 	}
 
+	// Background lines mentioning other (old) conversations must not be picked up
+	staleLine := "W1118 17:39:54.128249 231 extract_searchable_content.go:253] conversationsearch: oversized step: conversation=1a761917-e5a3-4491-af46-afe168befbf8 step=811"
+	if m := convUUIDRegex.FindStringSubmatch(staleLine); len(m) > 1 {
+		t.Errorf("convUUIDRegex matched a background conversationsearch line: %v", m)
+	}
+
 	// Should not match standalone trajectory IDs
 	invalidLine := "latency_breakdown.go:170] trajectory_id:7aaddd52-3b64-4c8d-b9f2-96726baadb12 total_latency_ms:3"
 	if m := convUUIDRegex.FindStringSubmatch(invalidLine); len(m) > 1 {

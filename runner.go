@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var convUUIDRegex = regexp.MustCompile(`(?i)(?:Streaming conversation|Resuming conversation|Created conversation|Starting conversation update stream for|found conversation[:\s]+|conversation(?:_id)?[:\s=]+|cascade_id[:=]|--conversation[= ])\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
+var convUUIDRegex = regexp.MustCompile(`(?i)(?:Streaming conversation|Resuming conversation|Created conversation|Starting conversation update stream for|found conversation[:\s]+|cascade_id[:=]|--conversation[= ])\s*([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})`)
 
 // runLogWaitBeforeFallback is how long we wait for agy to create the --log-file we asked
 // for before assuming it ignored the flag.
@@ -466,10 +466,12 @@ func cmdRun(customArgs []string) {
 		mu.Lock()
 		hitRateLimit := rateLimitDetected
 		aborted := userAborted
-		cID := activeConvID
-		if cID == "" && !hitRateLimit {
-			cID = getLatestConversationID()
+		if activeConvID == "" {
+			// Log parsing found nothing: fall back to the workspace's latest conversation so a
+			// rate-limit retry resumes it instead of silently starting a fresh one.
+			activeConvID = getLatestConversationID()
 		}
+		cID := activeConvID
 		mu.Unlock()
 
 		if aborted {
