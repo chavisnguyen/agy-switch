@@ -7,7 +7,7 @@ copy tokens and restart the conversation by hand. Save your Google accounts once
 `agys` switches between them, shows each account's quota, and can keep your session going when one
 account runs out.
 
-One small Go binary, standard library only. No telemetry: tokens never leave your disk.
+One small Go binary. No telemetry: tokens never leave your disk.
 
 ## Install
 
@@ -22,7 +22,7 @@ No Homebrew? Download the binary for your machine:
 curl -fsSL https://raw.githubusercontent.com/chavisnguyen/agy-switch/master/install.sh | bash
 ```
 
-Or build it (Go 1.22+): `git clone https://github.com/chavisnguyen/agy-switch && cd agy-switch && make install`.
+Or build it (needs a recent Go, see `go.mod`): `git clone https://github.com/chavisnguyen/agy-switch && cd agy-switch && make install`.
 
 Already installed another way? Remove the old binary first (`rm /opt/homebrew/bin/agys`), or `brew install` will report a conflict.
 

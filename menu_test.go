@@ -1,68 +1,65 @@
 package main
 
 import (
-	"reflect"
 	"testing"
+
+	"atomicgo.dev/keyboard/keys"
 )
 
-func keys(ks ...menuKey) []keyEvent {
-	var out []keyEvent
-	for _, k := range ks {
-		out = append(out, keyEvent{key: k})
-	}
-	return out
-}
+func runeKey(r rune) keys.Key { return keys.Key{Code: keys.RuneKey, Runes: []rune{r}} }
 
-func TestParseKeys(t *testing.T) {
+func TestTranslateKey(t *testing.T) {
 	cases := []struct {
-		name     string
-		in       string
-		timedOut bool
-		want     []keyEvent
-		wantRest string
+		name string
+		in   keys.Key
+		want keyEvent
 	}{
-		{"arrow down", "\x1b[B", false, keys(keyDown), ""},
-		{"arrow up", "\x1b[A", false, keys(keyUp), ""},
-		{"application mode arrows", "\x1bOA\x1bOB", false, keys(keyUp, keyDown), ""},
-		{"several keys in one read", "\x1b[B\x1b[B\x1b[A", false, keys(keyDown, keyDown, keyUp), ""},
-		{"page up/down", "\x1b[5~\x1b[6~", false, keys(keyPageUp, keyPageDown), ""},
-		{"home/end variants", "\x1b[H\x1b[F\x1b[1~\x1b[4~\x1b[7~\x1b[8~", false, keys(keyHome, keyEnd, keyHome, keyEnd, keyHome, keyEnd), ""},
-		{"modified arrow keeps direction", "\x1b[1;5A", false, keys(keyUp), ""},
-		{"unknown sequence is swallowed, not Esc", "\x1b[I", false, nil, ""},
-		{"alt+key ignored", "\x1bj", false, nil, ""},
-		{"lone esc waits for more input", "\x1b", false, nil, "\x1b"},
-		{"lone esc after timeout cancels", "\x1b", true, keys(keyCancel), ""},
-		{"partial CSI waits", "\x1b[", false, nil, "\x1b["},
-		{"partial CSI dropped after timeout", "\x1b[", true, nil, ""},
-		{"event then partial tail", "\x1b[B\x1b", false, keys(keyDown), "\x1b"},
-		{"vim keys", "jkgG", false, keys(keyDown, keyUp, keyHome, keyEnd), ""},
-		{"ctrl n/p", "\x0e\x10", false, keys(keyDown, keyUp), ""},
-		{"enter variants", "\r\n ", false, keys(keyEnter, keyEnter, keyEnter), ""},
-		{"cancel keys", "qQ\x03", false, keys(keyCancel, keyCancel, keyCancel), ""},
-		{"digits", "37", false, []keyEvent{{key: keyDigit, digit: 3}, {key: keyDigit, digit: 7}}, ""},
-		{"unrelated bytes ignored", "xyz0", false, nil, ""},
+		{"arrow up", keys.Key{Code: keys.Up}, keyEvent{key: keyUp}},
+		{"arrow down", keys.Key{Code: keys.Down}, keyEvent{key: keyDown}},
+		{"ctrl+p / ctrl+n", keys.Key{Code: keys.CtrlP}, keyEvent{key: keyUp}},
+		{"ctrl+n", keys.Key{Code: keys.CtrlN}, keyEvent{key: keyDown}},
+		{"home / end", keys.Key{Code: keys.Home}, keyEvent{key: keyHome}},
+		{"end", keys.Key{Code: keys.End}, keyEvent{key: keyEnd}},
+		{"page up", keys.Key{Code: keys.PgUp}, keyEvent{key: keyPageUp}},
+		{"page down", keys.Key{Code: keys.PgDown}, keyEvent{key: keyPageDown}},
+		{"enter", keys.Key{Code: keys.Enter}, keyEvent{key: keyEnter}},
+		{"space", keys.Key{Code: keys.Space}, keyEvent{key: keyEnter}},
+		{"esc", keys.Key{Code: keys.Esc}, keyEvent{key: keyCancel}},
+		{"ctrl+c", keys.Key{Code: keys.CtrlC}, keyEvent{key: keyCancel}},
+		{"q", runeKey('q'), keyEvent{key: keyCancel}},
+		{"vim j", runeKey('j'), keyEvent{key: keyDown}},
+		{"vim k", runeKey('k'), keyEvent{key: keyUp}},
+		{"g / G", runeKey('G'), keyEvent{key: keyEnd}},
+		{"digit", runeKey('7'), keyEvent{key: keyDigit, digit: 7}},
+		{"zero is not a jump", runeKey('0'), keyEvent{}},
+		{"unknown letter", runeKey('x'), keyEvent{}},
+		{"alt+q ignored", keys.Key{Code: keys.RuneKey, Runes: []rune{'q'}, AltPressed: true}, keyEvent{}},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got, rest := parseKeys([]byte(c.in), c.timedOut)
-			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("events = %+v, want %+v", got, c.want)
-			}
-			if string(rest) != c.wantRest {
-				t.Errorf("rest = %q, want %q", rest, c.wantRest)
-			}
-		})
+		if got := translateKey(c.in); got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
 	}
 }
 
-// An escape sequence split across two reads must still decode as one key.
-func TestParseKeysSplitAcrossReads(t *testing.T) {
-	ev, rest := parseKeys([]byte("\x1b"), false)
-	if len(ev) != 0 || string(rest) != "\x1b" {
-		t.Fatalf("first read: events=%v rest=%q", ev, rest)
+func TestMoveSelection(t *testing.T) {
+	cases := []struct {
+		name       string
+		sel, count int
+		key        menuKey
+		want       int
+	}{
+		{"down", 0, 3, keyDown, 1},
+		{"down wraps", 2, 3, keyDown, 0},
+		{"up wraps", 0, 3, keyUp, 2},
+		{"home", 4, 6, keyHome, 0},
+		{"end", 0, 6, keyEnd, 5},
+		{"page down clamps", 3, 6, keyPageDown, 5},
+		{"page up clamps", 2, 6, keyPageUp, 0},
 	}
-	ev, rest = parseKeys(append(rest, []byte("[B")...), false)
-	if !reflect.DeepEqual(ev, keys(keyDown)) || len(rest) != 0 {
-		t.Fatalf("second read: events=%v rest=%q, want a single Down", ev, rest)
+	for _, c := range cases {
+		if got := moveSelection(c.sel, c.count, keyEvent{key: c.key}); got != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
 	}
 }
