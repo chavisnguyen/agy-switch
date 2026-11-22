@@ -3,20 +3,27 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"atomicgo.dev/keyboard"
-	"atomicgo.dev/keyboard/keys"
 	"golang.org/x/term"
 )
 
-// The menu key handling uses atomicgo.dev/keyboard (the library pterm builds on): raw mode,
-// escape-sequence parsing and terminal restore are its job, on every platform.
+// Raw mode comes from golang.org/x/term; waitInput (poll_*.go) lets the loop tell a lone Esc
+// from the start of an escape sequence without a background reader goroutine (which would
+// swallow the first keypress meant for whatever runs after the menu).
+const escapeTimeout = 100 * time.Millisecond
+
+// isTerminalStdin reports whether stdin and stdout are both real terminals.
+func isTerminalStdin() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
 
 type menuKey int
 
 const (
-	keyNone menuKey = iota
-	keyUp
+	keyUp menuKey = iota + 1
 	keyDown
 	keyHome
 	keyEnd
@@ -24,7 +31,7 @@ const (
 	keyPageDown
 	keyEnter
 	keyCancel
-	keyDigit // keyEvent.digit holds 1-9
+	keyDigit // key.digit holds 1-9
 )
 
 type keyEvent struct {
@@ -32,73 +39,83 @@ type keyEvent struct {
 	digit int
 }
 
-// isTerminalStdin reports whether stdin and stdout are both real terminals.
-func isTerminalStdin() bool {
-	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
-}
+// parseKeys decodes raw terminal input into key events. It handles several keys arriving in
+// one read (key repeat, pasted input) and unknown escape sequences (swallowed, never mistaken
+// for Esc). An escape sequence cut off at the end of buf is returned in rest so the caller can
+// prepend it to the next read. If timedOut is true no more input is coming, so a trailing lone
+// Esc is a real Esc key and a trailing partial sequence is dropped.
+func parseKeys(buf []byte, timedOut bool) (events []keyEvent, rest []byte) {
+	for i := 0; i < len(buf); {
+		b := buf[i]
+		if b == 0x1b {
+			if i+1 >= len(buf) {
+				if timedOut {
+					events = append(events, keyEvent{key: keyCancel})
+					return events, nil
+				}
+				return events, buf[i:]
+			}
+			intro := buf[i+1]
+			if intro != '[' && intro != 'O' {
+				i += 2 // Alt+<key>: ignore
+				continue
+			}
+			// CSI ("ESC [ params final") or SS3 ("ESC O final")
+			j := i + 2
+			for j < len(buf) && buf[j] >= 0x20 && buf[j] <= 0x3f {
+				j++
+			}
+			if j >= len(buf) {
+				if timedOut {
+					return events, nil
+				}
+				return events, buf[i:]
+			}
+			params := string(buf[i+2 : j])
+			switch buf[j] {
+			case 'A':
+				events = append(events, keyEvent{key: keyUp})
+			case 'B':
+				events = append(events, keyEvent{key: keyDown})
+			case 'H':
+				events = append(events, keyEvent{key: keyHome})
+			case 'F':
+				events = append(events, keyEvent{key: keyEnd})
+			case '~':
+				switch params {
+				case "1", "7":
+					events = append(events, keyEvent{key: keyHome})
+				case "4", "8":
+					events = append(events, keyEvent{key: keyEnd})
+				case "5":
+					events = append(events, keyEvent{key: keyPageUp})
+				case "6":
+					events = append(events, keyEvent{key: keyPageDown})
+				}
+			}
+			i = j + 1
+			continue
+		}
 
-// translateKey maps a keyboard library key press to a menu key event.
-func translateKey(k keys.Key) keyEvent {
-	switch k.Code {
-	case keys.Up, keys.CtrlP:
-		return keyEvent{key: keyUp}
-	case keys.Down, keys.CtrlN:
-		return keyEvent{key: keyDown}
-	case keys.Home:
-		return keyEvent{key: keyHome}
-	case keys.End:
-		return keyEvent{key: keyEnd}
-	case keys.PgUp:
-		return keyEvent{key: keyPageUp}
-	case keys.PgDown:
-		return keyEvent{key: keyPageDown}
-	case keys.Enter, keys.Space:
-		return keyEvent{key: keyEnter}
-	case keys.Esc, keys.CtrlC:
-		return keyEvent{key: keyCancel}
-	case keys.RuneKey:
-		if k.AltPressed || len(k.Runes) != 1 {
-			return keyEvent{}
+		switch {
+		case b == 3, b == 'q', b == 'Q': // Ctrl+C, q
+			events = append(events, keyEvent{key: keyCancel})
+		case b == 10, b == 13, b == ' ':
+			events = append(events, keyEvent{key: keyEnter})
+		case b == 16, b == 'k', b == 'K': // Ctrl+P, vim up
+			events = append(events, keyEvent{key: keyUp})
+		case b == 14, b == 'j', b == 'J': // Ctrl+N, vim down
+			events = append(events, keyEvent{key: keyDown})
+		case b == 'g':
+			events = append(events, keyEvent{key: keyHome})
+		case b == 'G':
+			events = append(events, keyEvent{key: keyEnd})
+		case b >= '1' && b <= '9':
+			events = append(events, keyEvent{key: keyDigit, digit: int(b - '0')})
 		}
-		switch r := k.Runes[0]; {
-		case r == 'q' || r == 'Q':
-			return keyEvent{key: keyCancel}
-		case r == 'k' || r == 'K':
-			return keyEvent{key: keyUp}
-		case r == 'j' || r == 'J':
-			return keyEvent{key: keyDown}
-		case r == 'g':
-			return keyEvent{key: keyHome}
-		case r == 'G':
-			return keyEvent{key: keyEnd}
-		case r >= '1' && r <= '9':
-			return keyEvent{key: keyDigit, digit: int(r - '0')}
-		}
+		i++
 	}
-	return keyEvent{}
-}
-
-// moveSelection applies a navigation key to the selected row.
-func moveSelection(selected, count int, ev keyEvent) int {
-	switch ev.key {
-	case keyUp:
-		return (selected - 1 + count) % count
-	case keyDown:
-		return (selected + 1) % count
-	case keyHome:
-		return 0
-	case keyEnd:
-		return count - 1
-	case keyPageUp:
-		if selected -= 5; selected < 0 {
-			selected = 0
-		}
-	case keyPageDown:
-		if selected += 5; selected >= count {
-			selected = count - 1
-		}
-	}
-	return selected
+	return events, nil
 }
 
 // runMenu runs an interactive list menu with arrow-key / vim-key navigation.
@@ -116,37 +133,90 @@ func runMenu(count, initial, totalLines int, render func(selected int)) int {
 		selected = 0
 	}
 
-	result := -1
-	fmt.Print("\033[?25l") // hide cursor
-	defer fmt.Print("\033[?25h")
-	render(selected)
-
-	err := keyboard.Listen(func(k keys.Key) (bool, error) {
-		ev := translateKey(k)
-		switch ev.key {
-		case keyNone:
-			return false, nil
-		case keyCancel:
-			return true, nil
-		case keyEnter:
-			result = selected
-			return true, nil
-		case keyDigit:
-			if ev.digit <= count {
-				result = ev.digit - 1
-				return true, nil
-			}
-			return false, nil
-		}
-		if next := moveSelection(selected, count, ev); next != selected {
-			selected = next
-			fmt.Printf("\033[%dA\r", totalLines)
-			render(selected)
-		}
-		return false, nil
-	})
+	fd := int(os.Stdin.Fd())
+	if !menuSupported {
+		return -2
+	}
+	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		return -2
 	}
-	return result
+	restore := func() {
+		_ = term.Restore(fd, oldState)
+		fmt.Print("\033[?25h") // show cursor
+	}
+	defer restore()
+
+	// Guarantee a clean terminal on OS interrupt
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+	go func() {
+		<-sigChan
+		restore()
+		fmt.Print("\r\n")
+		os.Exit(1)
+	}()
+
+	fmt.Print("\033[?25l") // hide cursor
+	render(selected)
+
+	buf := make([]byte, 64)
+	var pending []byte
+	for {
+		// Block for input; if an escape sequence is half-received, only wait briefly for the rest.
+		timeout := time.Duration(-1)
+		if len(pending) > 0 {
+			timeout = escapeTimeout
+		}
+		ready, err := waitInput(fd, timeout)
+		if err != nil {
+			return -1
+		}
+		n := 0
+		if ready {
+			n, err = os.Stdin.Read(buf)
+			if err != nil || n == 0 {
+				return -1 // stdin closed
+			}
+		}
+		pending = append(pending, buf[:n]...)
+
+		var events []keyEvent
+		events, pending = parseKeys(pending, !ready)
+
+		before := selected
+		for _, ev := range events {
+			switch ev.key {
+			case keyCancel:
+				return -1
+			case keyEnter:
+				return selected
+			case keyDigit:
+				if ev.digit <= count {
+					return ev.digit - 1
+				}
+			case keyUp:
+				selected = (selected - 1 + count) % count
+			case keyDown:
+				selected = (selected + 1) % count
+			case keyHome:
+				selected = 0
+			case keyEnd:
+				selected = count - 1
+			case keyPageUp:
+				if selected -= 5; selected < 0 {
+					selected = 0
+				}
+			case keyPageDown:
+				if selected += 5; selected >= count {
+					selected = count - 1
+				}
+			}
+		}
+		if selected != before {
+			fmt.Printf("\033[%dA\r", totalLines)
+			render(selected) // one redraw per batch, however many keys arrived
+		}
+	}
 }
