@@ -1,288 +1,205 @@
-# 🚀 agys
+# agys
 
-<p align="center">
-  <b>A blazing-fast, lightweight, and zero-dependency multi-account manager & auto-failover runner for Google Antigravity CLI (<code>agy</code>).</b>
-</p>
+**Multi-account manager and auto-failover runner for Google Antigravity CLI (`agy`).**
 
-<p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/chavisnguyen/agy-switch/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" />
-  <img src="https://img.shields.io/badge/Language-Go%201.22+-00ADD8?style=flat-square&logo=go" alt="Go" />
-  <img src="https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-black?style=flat-square&logo=apple" alt="Platforms" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/Dependencies-Zero-blue?style=flat-square" alt="Zero Dependencies" />
-</p>
+When `agy` hits a rate limit (HTTP 429 / `RESOURCE_EXHAUSTED`), you normally have to switch accounts,
+copy tokens and restart the conversation by hand. Save your Google accounts once as profiles, then
+`agys` switches between them, shows each account's quota, and can keep your session going when one
+account runs out.
 
----
+One small Go binary, standard library only. No telemetry: tokens never leave your disk.
 
-## 🌟 Why `agys`?
+## Install
 
-Google Antigravity (`agy`) is powerful, but when hitting rate limits (HTTP 429 / `RESOURCE_EXHAUSTED`), manually switching accounts, copying tokens, or restarting conversations disrupts your flow.
-
-**`agys`** solves this with a standalone, native Go binary (compiled with standard library only):
-- ⚡ **Instant Switching**: Switch profiles in under a second with atomic file writes and macOS Keychain sync.
-- 📊 **Real-Time Quotas**: Check Claude Sonnet and Gemini quotas + reset schedules for all your accounts at a glance.
-- 🔄 **Smart Auto-Failover**: Run `agys run` to automatically rotate to a healthy account when hitting rate limits and resume your conversation without losing context (`--continue`).
-- 🏷️ **Dynamic Tab Titles**: Keeps your terminal tab title synced with the actual chat topic (supports Ghostty, CMUX, iTerm2, Kitty, and macOS Terminal).
-- ⏱️ **Intelligent Cooldowns**: Automatically cools down exhausted accounts for 30 minutes to prevent switching cycles.
-- 🔒 **100% Private & Secure**: Tokens stay strictly on your local disk with `0600` permissions. No telemetry, no third-party servers.
-
----
-
-## 📦 Quick Installation
-
-### Method 0: Homebrew (macOS / Linux)
 ```bash
 brew tap chavisnguyen/agy-switch https://github.com/chavisnguyen/agy-switch
 brew install agys
 ```
-Upgrade with `brew upgrade agys` (`agys update` detects a Homebrew install and tells you to do this).
-If you previously installed another way, remove the old binary first: `rm /opt/homebrew/bin/agys`.
 
-### Method 1: One-Line Install (No Go Required ⚡)
-Run this single command in your terminal. It automatically detects your machine's OS/architecture and downloads the pre-built binary:
+No Homebrew? Download the binary for your machine:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chavisnguyen/agy-switch/master/install.sh | bash
 ```
 
-### Method 2: Build From Source (Requires Go 1.22+)
+Or build it (Go 1.22+): `git clone https://github.com/chavisnguyen/agy-switch && cd agy-switch && make install`.
+
+Already installed another way? Remove the old binary first (`rm /opt/homebrew/bin/agys`), or `brew install` will report a conflict.
+
+## Quick start
+
+**1. Once: save the account you are logged in with, and add the others.**
+
 ```bash
-git clone https://github.com/chavisnguyen/agy-switch.git
-cd agy-switch
-make install
-```
-This compiles the optimized native binary and installs `agys` globally into `/opt/homebrew/bin/agys` (or `~/.local/bin/agys`).
-
-### 🔄 Keeping `agys` Up to Date
-Upgrade to the newest release anytime with a single command:
-```bash
-agys update
-```
-*(You will also get a friendly notification when running `agys status` whenever a new release is available).*
-
----
-
-## 📖 Command Reference
-
-### 🚀 Run & Code
-| Command | Description |
-| :--- | :--- |
-| **`agys run [args...]`** | Smart runner: runs `agy` with auto-failover & context resume on rate limits |
-| **`agys conv [dir]`** | Interactive picker (`↑`/`↓`): select & resume conversations in current or target folder |
-
-### 📊 Accounts & Quotas
-| Command | Description |
-| :--- | :--- |
-| **`agys status`** (or `ls`) | Unified view of all accounts, real-time quotas, 5h cycles & Weekly Cap status |
-| **`agys next`** | Auto-switch to the optimal account (smart burn expiring tokens + load balancing) |
-| **`agys <profile>`** | Instantly switch to the specified profile |
-| **`agys`** | Interactive numbered menu to select and switch accounts |
-
-### ⚙️ Profile Management
-| Command | Description |
-| :--- | :--- |
-| `agys login [name]` | Authenticate a new Google account in browser and save profile |
-| `agys save [name]` | Save current active session as a named profile |
-| `agys rename <old> <new>` | Rename an existing saved profile |
-| `agys remove <name>` | Delete a saved profile |
-| `agys cooldown [clear]` | View active cooldowns or reset all profiles back to Ready |
-
-### 🛠️ Utility
-| Command | Description |
-| :--- | :--- |
-| `agys install` | Install global shortcut symlinks (`/opt/homebrew/bin` or `~/.local/bin`) |
-| `agys update` | Automatically update `agys` to the latest GitHub release |
-| `agys version` | Show current installed version & architecture |
-| `agys help` | Display built-in help message |
-
----
-
-## 🚀 Quick Walkthrough
-
-### 1. Save Your Existing Active Account
-If you already logged into `agy`:
-```bash
-agys save main
+agys save main          # the account agy is using right now
+agys login work         # log in with another Google account and save it as "work"
 ```
 
-### 2. Add Additional Google Accounts
-Use the login wizard to add more accounts without losing your existing session:
-```bash
-agys login work
-```
-*The wizard temporarily stashes your active session, launches `agy` for Google browser login, saves the new profile as `work`, and restores cleanly.*
+`login` sets your current session aside, opens `agy` for the browser login, saves the new profile and puts your session back.
 
-### 3. Check Real-Time Quotas (5h Cycle vs 7-Day Weekly Cap)
+**2. See every account's quota.**
+
 ```bash
 agys status
 ```
-Output preview:
+
 ```text
 📊 AGY ACCOUNTS STATUS & QUOTA
 ══════════════════════════════════════════════════════════
 [1] work (● ACTIVE)
     Email  : work.developer@gmail.com
-    Claude : 🟢 100.0% (resets 16:46 in 4h59m [5h])
-    Gemini : 🟢 100.0% (resets 16:46 in 4h59m [5h])
+    Claude 5h 🟢 [████████████████████] 100.0%  in 4h59m (16:46)
+    Claude 1w 🟢 [██████████░░░░░░░░░░]  50.0%  6d17h left (29 Nov)
+    Gemini 5h 🟢 [████████████████████] 100.0%  in 4h59m (16:46)
+    Gemini 1w 🟢 [████████████████████] 100.0%  6d17h left (29 Nov)
     ──────────────────────────────────────────────────
 [2] personal (○ Ready)
     Email  : personal@gmail.com
-    Claude : 🟢 100.0% (resets 16:46 in 4h59m [5h])
-    Gemini : 🟢  79.8% (resets 12:43 in 56m [5h])
-    ──────────────────────────────────────────────────
-[3] main (🔴 Weekly Cap)
-    Email  : main.dev@gmail.com
-    Claude : 🔴   0.0% (resets 02 Nov 21:20, 1d left [Weekly Cap ⚠️])
-    Gemini : 🟢 100.0% (resets 16:46 in 4h59m [5h])
+    Claude 5h 🟢 [████████████████████] 100.0%  blocked by weekly cap
+    Claude 1w 🔴 [░░░░░░░░░░░░░░░░░░░░]   0.0%  2d07h left (25 Nov)
+    Gemini 5h 🟢 [████████████████████] 100.0%  in 4h59m (16:46)
+    Gemini 1w 🟢 [████████████████████]  98.2%  5d18h left (28 Nov)
 ══════════════════════════════════════════════════════════
 ```
 
-> [!NOTE]
-> `agys` automatically detects whether an account is in the standard **5-hour burst cycle** (`[5h]`) or has reached Google's **7-day protective limit** (`[Weekly Cap ⚠️]`), preventing blind switches into dead accounts!
+Each model has two limits: a **5-hour** window and a **weekly** one. When the weekly limit is used up,
+the 5-hour line says `blocked by weekly cap`, because the 5h bar does not apply any more.
 
-### 4. Switch Accounts On The Fly
-```bash
-# Switch directly to an account
-agys main
-
-# Or rotate to next optimal account (smart burn & load balanced)
-agys next
-
-# Or open interactive menu to pick by number
-agys
-```
-
----
-
-## 🧠 Smart Quota Optimization (Built into `agys next` & `agys run`)
-
-Google Antigravity quotas operate on a **"Use-It-Or-Lose-It"** model. If an account has 70% quota remaining with 30 minutes until reset, that quota evaporates if unused. 
-
-Whenever you run **`agys next`** or whenever **`agys run`** encounters a 429 rate limit, it automatically inspects quotas in real-time and picks the optimal account:
-
-### How Smart Selection Works:
-1. **Urgent Burn**: If an account is expiring in `< 90m` with `>= 10%` quota, it prioritizes switching to it so no tokens are wasted before the reset window closes.
-2. **Weekly Cap Protection**: Accounts with `0.0%` quota and multi-day reset locks (`[Weekly Cap ⚠️]`) are strictly skipped — no more blind switches into dead accounts!
-3. **Balanced Load**: When accounts have ample time, it balances usage across 5h accounts so no single account prematurely triggers the 7-day weekly cap.
-4. **Zero Configuration**: This intelligence runs automatically in `agys next` and `agys run` without requiring any extra flags. (You can also run `agys burn` as an alias).
-
----
-
-## 💬 Interactive Conversation Picker (`agys conv`)
-
-Resume conversations for your current workspace without hunting for UUIDs:
+**3. Switch, or let `agys` choose.**
 
 ```bash
-agys conv
+agys main        # switch to a profile
+agys next        # switch to the best account right now
+agys             # pick from a numbered menu
 ```
 
-```text
-💬 CONVERSATIONS FOR: /Users/chavis/Documents/personal/tool/agy-switch
-════════════════════════════════════════════════════════════════════════════════════════════
-    ID    TITLE                                  STEPS   LAST ACTIVE        CONV ID           
-────────────────────────────────────────────────────────────────────────────────────────────
-❯   [1]   Agy Switch Rate Limit Error            524     Just now           6c04bd0d…          ●
-    [2]   Checking Status Command Usage          770     3h ago             f51a3479…         
-    [3]   General Greeting                       71      23h ago            0d816ff0…         
-    [4]   Simple Greeting                        2       Yesterday          c1fd6d46…         
-    [5]   AI Model Identification                1       Yesterday          8ab7b921…         
-────────────────────────────────────────────────────────────────────────────────────────────
-● indicates current active session for this folder
-↑/↓ or j/k: navigate • Enter: resume • 1-9: jump • q/Esc: cancel
-```
+**4. Run `agy` with auto-failover.**
 
-### Controls & Options:
-* **`↑` / `↓`** (or **`j` / `k`**): Smoothly navigate up and down with loop-around.
-* **`Enter`**: Instantly resume the highlighted conversation with auto-failover enabled (`agys run --conversation=<id>`).
-* **`1` – `9`**: Jump directly to a conversation number.
-* **`q` / `Esc`**: Cancel and exit cleanly.
-* **Resume immediately by number**: `agys conv 2` (resumes conversation #2 directly).
-* **View other workspaces**: `agys conv /path/to/other-project` or `agys conv other-project`.
-* **View all recent chats globally**: `agys conv -a` (or `--all`).
-* **List only without prompt**: `agys conv -l`.
-
----
-
-## ⚡ Smart Runner (`agys run`)
-
-Run `agy` through `agys run` for uninterrupted development:
 ```bash
-# Start a new task
 agys run
-
-# Or continue a previous conversation
-agys run --continue
-agys run --conversation=5af43360-c5c2-4331-98e9-7a65630a90fb
 ```
 
-### What happens when you hit a Rate Limit?
-1. `agys` catches the 429 / `RESOURCE_EXHAUSTED` error in real-time, from the log of the `agy` session it launched.
-2. Puts the account that session was using into a 30-minute cooldown.
-3. Automatically rotates tokens to the next healthy account.
-4. Auto-resumes your conversation with `--continue` — **your coding session continues without losing state or context!**
+That's all most people need.
 
-### Running multiple windows
-You can run `agys run` in several terminals at once. Each window is handled independently:
+---
 
-- **Own log per window**: `agys` starts `agy` with its own `--log-file` (`~/.gemini/antigravity-cli/log/agys-run-*.log`) and only watches that file, so one window's 429 never restarts another window. Tail `agys-run-*.log` (not `cli.log`) to follow these sessions. If your `agy` ignores `--log-file`, `agys` prints a warning and falls back to the shared `cli.log`.
-- **Cooldown goes to the right account**: `agys` remembers which account each session started with and cools down that account, even if another window has since switched the machine to a different one.
-- **One switch at a time**: account switches are serialized with a lock (`profiles/.switch.lock`). If a window finds that another window already moved the machine to a healthy account, it resumes on that account instead of switching again.
+## When you hit a rate limit
 
-> ⚠️ The active account is machine-wide (one token file and one Keychain entry), so windows tend to converge on the same account after a failover. Separate accounts per window are not supported.
+`agys run` starts `agy` and watches its log. On a 429 it:
 
-### Dynamic Tab Title Sync
-When running `agys run`, your terminal tab title automatically reflects the conversation's real topic name (e.g., `Building MCP Server`) instead of generic command strings. Compatible with CMUX, Ghostty, iTerm2, and macOS Terminal.
+1. puts the account that session was using into a 30-minute cooldown,
+2. switches to the next healthy account (same choice as `agys next`),
+3. resumes your conversation with `--continue`, so you keep your context.
 
-### Easy Resume Hints
-When your session ends, `agys run` prints a quick copy-paste command to pick up right where you left off:
+```bash
+agys run                                   # new task
+agys run --continue                        # continue the last conversation
+agys run --conversation=<id>               # continue a specific one
+```
+
+When the session ends, `agys run` prints the exact command to pick it up again.
+
+### Running several windows
+
+You can run `agys run` in many terminals at once; each window is handled on its own.
+
+- Each window gets its own log (`~/.gemini/antigravity-cli/log/agys-run-*.log`), so one window's 429 never restarts another. If your `agy` ignores `--log-file`, `agys` warns and falls back to the shared `cli.log`.
+- The cooldown goes to the account that window started with, even if another window has switched since.
+- Switches are serialized with a lock. If another window already moved to a healthy account, yours resumes on it instead of switching again.
+
+> **Note:** the active account is machine-wide (one token file, one Keychain entry), so windows tend to
+> end up on the same account after a failover. Separate accounts per window are not supported.
+
+## How `agys next` picks an account
+
+Quota resets are "use it or lose it": 70% left with 30 minutes to the reset is wasted if you don't use it.
+`agys next` (and failover) reads every account's quota and picks, in this order:
+
+1. **Expiring soon:** an account whose 5h window resets in under 90 minutes with at least 10% left, so it gets used before it resets.
+2. **Not weekly-capped:** accounts whose weekly limit is used up (under 5% left) are skipped for Claude.
+3. **Balanced:** among the rest, prefer the one that spreads usage, so no single account hits its weekly cap early.
+4. **Gemini fallback:** if Claude is exhausted everywhere, an account with Gemini quota left.
+
+Accounts in cooldown are never picked. `agys burn` does the same selection.
+
+## Resume a conversation
+
+```bash
+agys conv                 # conversations for this folder
+```
+
 ```text
-To continue this conversation with auto-failover, run:
-  agys run --conversation=5af43360-c5c2-4331-98e9-7a65630a90fb
+💬 CONVERSATIONS FOR: /Users/me/projects/my-app
+════════════════════════════════════════════════════════════════════════════════════════════
+    ID    TITLE                                  STEPS   LAST ACTIVE        CONV ID
+────────────────────────────────────────────────────────────────────────────────────────────
+❯   [1]   Fix login redirect                     524     Just now           6c04bd0d…          ●
+    [2]   Checking status command usage          770     3h ago             f51a3479…
+    [3]   General greeting                       71      23h ago            0d816ff0…
+════════════════════════════════════════════════════════════════════════════════════════════
+● = current session for this folder
 ```
 
----
+Keys: `↑` `↓` (or `j` `k`) move · `1`-`9` jump · `enter` resume with auto-failover · `q` cancel.
 
-## 🛡️ Architecture & Security
+| Run | It does |
+|---|---|
+| `agys conv 2` | resume conversation #2 right away |
+| `agys conv /path/to/project` | list another folder's conversations |
+| `agys conv -a` | list recent conversations from every folder |
+| `agys conv -l` | just list, no prompt |
 
-- **Atomic Token Swapping**: Writes tokens to temporary files before atomic rename, preventing file corruption if interrupted.
-- **Keychain Synchronization**: Encodes tokens and syncs with macOS Keychain (`security add-generic-password -s gemini -a antigravity`) so both Antigravity CLI and IDE stay synchronized.
-- **IPv4 Connection Pooling**: Quota queries prioritize TCP IPv4 routing to bypass hanging IPv6 ISP routes and ensure sub-second response times.
-- **Zero Secrets in Repository**: Google OAuth client credentials are obfuscated and resolved at runtime.
-- **Local Storage (`0600`)**: Profiles are stored in `~/.gemini/antigravity-cli/profiles/` accessible only by your user account.
+## Something not right?
 
----
+| Run | It tells you |
+|---|---|
+| `agys status` | each account's 5h and weekly quota, and which one is active or in cooldown |
+| `agys quota-raw [profile]` | the raw quota response from Google, for when the numbers look wrong |
+| `agys cooldown` | accounts currently cooling down (`agys cooldown clear` resets them) |
+| `agys version` | the installed version |
 
-## 📂 Project Structure
+## Good to know
 
-```text
-.
-├── .github/
-│   └── workflows/
-│       ├── ci.yml              # Automated cross-platform tests (macOS & Ubuntu)
-│       └── release.yml         # Automated cross-platform release builder
-├── main.go                     # CLI entrypoint, router, and command handlers
-├── conversations.go            # Interactive conversation picker & SQLite metadata parser
-├── conversations_test.go       # Tests for relative time & string truncation
-├── profiles.go                 # Profile storage, JWT decode, atomic swap & Keychain sync
-├── quota.go                    # Parallel quota inspection & 5h vs Weekly Cap optimizer
-├── quota_test.go               # Tests for 5h vs Weekly reset formatting & candidate scoring
-├── runner.go                   # Smart wrapper: per-window log, 429 auto-failover, tab title sync & hints
-├── runner_test.go              # Tests for regex UUID parsing & argument extraction
-├── updater.go                  # Self-updater (agys update), version checker & release puller
-├── failover.go                 # Real-time rate-limit matcher, session-pinned cooldown & auto-failover engine
-├── switchlock.go               # Cross-process lock so concurrent windows switch accounts once
-├── menu.go                     # Shared arrow-key menu runner & escape-sequence key parser
-├── terminal_unix.go            # Raw terminal mode via termios ioctl (macOS & Linux, no stty)
-├── terminal_darwin.go          # termios ioctl request numbers (macOS)
-├── terminal_linux.go           # termios ioctl request numbers (Linux)
-├── terminal_other.go           # Raw-mode stub for other platforms (falls back to text prompt)
-├── e2e/                        # Black-box end-to-end tests (mock agy, incl. multi-window scenarios)
-├── install.sh                  # 1-line curl installer & local installer
-├── Makefile                    # make build, make install, make clean
-└── README.md                   # Documentation
+- **Tokens** are stored in `~/.gemini/antigravity-cli/profiles/`, readable only by you (`0600`). Switching writes to a temp file and renames it, so an interruption can't corrupt a token.
+- **Keychain:** on macOS, switching also updates the `gemini` / `antigravity` Keychain entry, so the CLI and the IDE stay on the same account.
+- **Quota checks** try IPv4 first, so a broken IPv6 route doesn't make `agys status` hang.
+- **Tab title:** while `agys run` is active, your terminal tab shows the conversation's topic (Ghostty, CMUX, iTerm2, Kitty, macOS Terminal).
+- **5h reset times** can look identical across accounts. That is what Google returns; use `agys quota-raw` to see it.
+- Google OAuth client credentials are obfuscated in the binary and resolved at run time; nothing secret is stored in this repository.
+
+## All commands
+
+| Command | What it does |
+|---|---|
+| `agys status` (or `ls`) | all accounts with quota, 5h and weekly |
+| `agys <profile>` | switch to a profile |
+| `agys next` / `agys burn` | switch to the best account |
+| `agys` | numbered menu to switch accounts |
+| `agys run [args...]` | run `agy` with auto-failover and resume |
+| `agys conv [dir]` | pick and resume a conversation |
+| `agys login [name]` | log in with a Google account in the browser and save it |
+| `agys save [name]` | save the current session as a profile |
+| `agys rename <old> <new>` | rename a profile |
+| `agys remove <name>` | delete a profile |
+| `agys cooldown [clear]` | show cooldowns / reset them |
+| `agys quota-raw [profile]` | print Google's raw quota response |
+| `agys install` | add shortcut symlinks (`/opt/homebrew/bin` or `~/.local/bin`) |
+| `agys update` | update to the latest release (on Homebrew, tells you to use `brew upgrade`) |
+| `agys version` / `agys help` | version / built-in help |
+
+## Update
+
+```bash
+brew update && brew upgrade agys      # installed with Homebrew
+agys update                           # installed with install.sh or make install
 ```
 
----
+`agys status` also tells you when a newer release is available.
 
-## 📄 License
+## Uninstall
 
-MIT License. Feel free to use, modify, and distribute.
+```bash
+brew uninstall agys && brew untap chavisnguyen/agy-switch
+```
+
+Your saved profiles stay in `~/.gemini/antigravity-cli/profiles/` (they hold your login tokens). Delete that folder too if you want them gone.
