@@ -86,6 +86,9 @@ type ProfileQuota struct {
 type QuotaWindow struct {
 	Remaining float64
 	ResetTime string
+	// Disabled is set by the server when the window does not currently apply
+	// (e.g. the 5h bucket once the weekly limit has been hit).
+	Disabled bool
 }
 
 type QuotaBucket struct {
@@ -93,6 +96,7 @@ type QuotaBucket struct {
 	Window            string  `json:"window"`
 	RemainingFraction float64 `json:"remainingFraction"`
 	ResetTime         string  `json:"resetTime"`
+	Disabled          bool    `json:"disabled"`
 }
 
 type QuotaGroup struct {
@@ -297,7 +301,7 @@ func fetchQuotaSummary(ctx context.Context, accessToken string) (*QuotaSummaryRe
 func applyQuotaSummary(quota *ProfileQuota, summary *QuotaSummaryResponse) {
 	for _, g := range summary.Groups {
 		for _, b := range g.Buckets {
-			w := QuotaWindow{Remaining: b.RemainingFraction, ResetTime: b.ResetTime}
+			w := QuotaWindow{Remaining: b.RemainingFraction, ResetTime: b.ResetTime, Disabled: b.Disabled}
 			switch b.BucketID {
 			case "3p-5h":
 				quota.Claude5h = w
@@ -347,10 +351,10 @@ func formatQuotaBadge(fraction float64, err error) string {
 	str := fmt.Sprintf("%5.1f%%", pct)
 	if pct >= 50 {
 		return colorize("🟢 "+str, ColorGreen)
-	} else if pct > 0 {
+	} else if pct >= 10 {
 		return colorize("🟡 "+str, ColorYellow)
 	}
-	return colorize("🔴   0.0%", ColorRed)
+	return colorize("🔴 "+str, ColorRed)
 }
 
 func formatResetTime(resetStr string) string {
@@ -483,7 +487,7 @@ func quotaStatusEmoji(remaining float64) string {
 	pct := remaining * 100
 	if pct >= 50 {
 		return "🟢"
-	} else if pct > 0 {
+	} else if pct >= 10 {
 		return "🟡"
 	}
 	return "🔴"
@@ -519,11 +523,10 @@ func formatBucketResetCompact(resetStr string, isWeekly bool) string {
 	if diff <= 0 {
 		return fmt.Sprintf("reset pending (%s)", local.Format("02 Jan"))
 	}
-	days := int((diff + 12*time.Hour).Hours() / 24)
-	if days > 1 {
-		return fmt.Sprintf("%dd left (%s)", days, local.Format("02 Jan"))
-	} else if days == 1 {
-		return fmt.Sprintf("1d left (%s)", local.Format("02 Jan"))
+	if diff >= 24*time.Hour {
+		d := int(diff.Hours()) / 24
+		h := int(diff.Hours()) % 24
+		return fmt.Sprintf("%dd%02dh left (%s)", d, h, local.Format("02 Jan"))
 	}
 	return fmt.Sprintf("%dh left (%s)", int(diff.Hours()), local.Format("02 Jan"))
 }
@@ -539,6 +542,19 @@ type SmartCandidate struct {
 	IsGeminiWeekly  bool
 	IsLocked        bool
 	LockReason      string
+}
+
+// applyBindingWindow overrides the single-window values with the weekly bucket
+// when it is nearly exhausted (< 5%), since that is what actually limits usage.
+func applyBindingWindow(remaining *float64, diff *time.Duration, isWeekly *bool, hasSummary bool, fiveH, weekly QuotaWindow, now time.Time) {
+	if !hasSummary || weekly.Remaining >= 0.05 {
+		return
+	}
+	*remaining = weekly.Remaining
+	*isWeekly = true
+	if t, err := time.Parse(time.RFC3339, weekly.ResetTime); err == nil {
+		*diff = t.Sub(now)
+	}
 }
 
 func evaluateProfileCandidate(p ProfileInfo, q ProfileQuota, now time.Time) SmartCandidate {
@@ -566,6 +582,11 @@ func evaluateProfileCandidate(p ProfileInfo, q ProfileQuota, now time.Time) Smar
 			}
 		}
 	}
+
+	// When the 5h/weekly split is known, an exhausted weekly bucket blocks the
+	// model regardless of how full the 5h bucket looks.
+	applyBindingWindow(&c.ClaudeRemaining, &c.ClaudeDiff, &c.IsClaudeWeekly, q.ClaudeHasSummary, q.Claude5h, q.ClaudeWeekly, now)
+	applyBindingWindow(&c.GeminiRemaining, &c.GeminiDiff, &c.IsGeminiWeekly, q.GeminiHasSummary, q.Gemini5h, q.GeminiWeekly, now)
 
 	if p.IsCoolingDown {
 		c.IsLocked = true
@@ -676,4 +697,42 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 	}
 
 	return "", ""
+}
+
+// fetchRawQuotaSummary returns the unparsed retrieveUserQuotaSummary body for
+// a token file, pretty-printed when it is valid JSON. Debug aid for `agys quota-raw`.
+func fetchRawQuotaSummary(ctx context.Context, tokenFile string) (string, error) {
+	raw, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", err
+	}
+	var tf OAuthTokenFile
+	if err := json.Unmarshal(raw, &tf); err != nil {
+		return "", err
+	}
+	accessToken, err := getFreshAccessToken(ctx, tf.Token.RefreshToken, tf.Token.AccessToken)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", quotaSummaryURL, bytes.NewBuffer([]byte("{}")))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", quotaSummaryUserAgent)
+	resp, err := quotaHTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("api error (%d): %s", resp.StatusCode, string(body))
+	}
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, body, "", "  ") == nil {
+		return pretty.String(), nil
+	}
+	return string(body), nil
 }

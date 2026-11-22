@@ -226,7 +226,11 @@ func printQuotaLine(modelLabel, prefix string, hasSummary bool, fiveH, weekly Qu
 	}
 
 	if hasSummary {
-		printQuotaBarLine(prefix, modelLabel+" 5h", fiveH.Remaining, formatBucketResetCompact(fiveH.ResetTime, false))
+		fiveHInfo := formatBucketResetCompact(fiveH.ResetTime, false)
+		if fiveH.Disabled || (weekly.Remaining < 0.05 && fiveH.Remaining >= 0.05) {
+			fiveHInfo = "blocked by weekly cap"
+		}
+		printQuotaBarLine(prefix, modelLabel+" 5h", fiveH.Remaining, fiveHInfo)
 		printQuotaBarLine(prefix, modelLabel+" 1w", weekly.Remaining, formatBucketResetCompact(weekly.ResetTime, true))
 		return
 	}
@@ -845,6 +849,26 @@ UTILITY:
   agys help                    Show this help message`)
 }
 
+// cmdQuotaRaw dumps the raw retrieveUserQuotaSummary response for debugging
+// (optionally for a single profile name).
+func cmdQuotaRaw(args []string) {
+	profiles, _ := getAllProfiles()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, p := range profiles {
+		if len(args) > 0 && p.ProfileName != args[0] {
+			continue
+		}
+		fmt.Printf("=== %s ===\n", p.ProfileName)
+		out, err := fetchRawQuotaSummary(ctx, p.FilePath)
+		if err != nil {
+			fmt.Println("error:", err)
+			continue
+		}
+		fmt.Println(out)
+	}
+}
+
 func main() {
 	args := os.Args[1:]
 
@@ -900,6 +924,8 @@ func main() {
 		cmdInstall()
 	case "cooldown":
 		cmdCooldown(args[1:])
+	case "quota-raw":
+		cmdQuotaRaw(args[1:])
 	case "help", "--help", "-h":
 		printHelp()
 	default:
