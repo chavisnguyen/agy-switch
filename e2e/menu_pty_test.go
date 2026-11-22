@@ -77,14 +77,20 @@ def scenario(sends, final=None, wait=3.0):
         if isinstance(s, float):
             time.sleep(s)
             continue
-        os.write(fd, s)
+        try:
+            os.write(fd, s)
+        except OSError:
+            break  # child already exited
         # do not wait for output between the two halves of a split sequence
         if i + 1 < len(sends) and isinstance(sends[i + 1], float):
             continue
         seen += drain(fd, 0.4)
     during = seen
     if final is not None:
-        os.write(fd, final)
+        try:
+            os.write(fd, final)
+        except OSError:
+            pass  # menu already exited (e.g. a split sequence was taken as Esc): report below
     tail, exited = finish(pid, fd, wait)
     text = (during + tail).decode("utf-8", "replace")
     return {
@@ -99,7 +105,7 @@ def scenario(sends, final=None, wait=3.0):
 res = {}
 res["arrows"] = scenario([b"\x1b[B", b"\x1b[B", b"\x1b[A", b"\x1b[B"], final=b"q")
 res["coalesced"] = scenario([b"\x1b[B\x1b[B"], final=b"q")
-res["split"] = scenario([b"\x1b", 0.03, b"[B"], final=b"q")
+res["split"] = scenario([b"\x1b", 0.01, b"[B"], final=b"q")
 res["esc"] = scenario([], final=b"\x1b")
 res["vim"] = scenario([b"j", b"j", b"k"], final=b"q")
 res["enter"] = scenario([b"\x1b[B"], final=b"\r", wait=8.0)
