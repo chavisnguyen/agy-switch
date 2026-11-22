@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var Version = "v1.0.12"
+var Version = "v1.0.13"
 
 const (
 	repoOwner = "chavisnguyen"
@@ -130,6 +130,12 @@ func cmdUpdate() {
 	}
 	if realPath, err := filepath.EvalSymlinks(exePath); err == nil {
 		exePath = realPath
+	}
+
+	// Homebrew owns this binary: replacing it in place would desync brew's state.
+	if strings.Contains(exePath, "/Cellar/") {
+		fmt.Printf("%s Installed via Homebrew. Run: %s\n", colorize("ℹ️", ColorCyan), colorize("brew update && brew upgrade agys", ColorBold))
+		return
 	}
 
 	assetName := fmt.Sprintf("agys-%s-%s", runtime.GOOS, runtime.GOARCH)

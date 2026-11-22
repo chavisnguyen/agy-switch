@@ -30,6 +30,14 @@ Google Antigravity (`agy`) is powerful, but when hitting rate limits (HTTP 429 /
 
 ## 📦 Quick Installation
 
+### Method 0: Homebrew (macOS / Linux)
+```bash
+brew tap chavisnguyen/agy-switch https://github.com/chavisnguyen/agy-switch
+brew install agys
+```
+Upgrade with `brew upgrade agys` (`agys update` detects a Homebrew install and tells you to do this).
+If you previously installed another way, remove the old binary first: `rm /opt/homebrew/bin/agys`.
+
 ### Method 1: One-Line Install (No Go Required ⚡)
 Run this single command in your terminal. It automatically detects your machine's OS/architecture and downloads the pre-built binary:
 ```bash
