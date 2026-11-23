@@ -55,7 +55,7 @@ agys status
     ──────────────────────────────────────────────────
 [2] personal (○ Ready)
     Email  : personal@gmail.com
-    Claude 5h 🟢 [████████████████████] 100.0%  blocked by weekly cap
+    Claude 5h 🔴 [░░░░░░░░░░░░░░░░░░░░]   0.0%  blocked by weekly cap
     Claude 1w 🔴 [░░░░░░░░░░░░░░░░░░░░]   0.0%  2d07h left (25 Nov)
     Gemini 5h 🟢 [████████████████████] 100.0%  in 4h59m (16:46)
     Gemini 1w 🟢 [████████████████████]  98.2%  5d18h left (28 Nov)
@@ -63,7 +63,8 @@ agys status
 ```
 
 Each model has two limits: a **5-hour** window and a **weekly** one. When the weekly limit is used up,
-the 5-hour line says `blocked by weekly cap`, because the 5h bar does not apply any more.
+the server marks the 5-hour bucket as disabled. The 5-hour line then shows 0% and `blocked by weekly cap`,
+because nothing is usable until the weekly limit resets.
 
 **3. Switch, or let `agys` choose.**
 

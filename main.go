@@ -227,10 +227,15 @@ func printQuotaLine(modelLabel, prefix string, hasSummary bool, fiveH, weekly Qu
 
 	if hasSummary {
 		fiveHInfo := formatBucketResetCompact(fiveH.ResetTime, false)
-		if fiveH.Disabled || (weekly.Remaining < 0.05 && fiveH.Remaining >= 0.05) {
+		fiveHRemaining := fiveH.Remaining
+		// The server sets disabled=true on the 5h bucket once the weekly limit is
+		// hit ("the 5-hour limit does not currently apply"). Nothing is usable
+		// then, so show 0% instead of the misleading 100%.
+		if fiveH.Disabled {
 			fiveHInfo = "blocked by weekly cap"
+			fiveHRemaining = 0
 		}
-		printQuotaBarLine(prefix, modelLabel+" 5h", fiveH.Remaining, fiveHInfo)
+		printQuotaBarLine(prefix, modelLabel+" 5h", fiveHRemaining, fiveHInfo)
 		printQuotaBarLine(prefix, modelLabel+" 1w", weekly.Remaining, formatBucketResetCompact(weekly.ResetTime, true))
 		return
 	}
