@@ -78,3 +78,48 @@ func TestEvaluateProfileCandidate(t *testing.T) {
 		t.Errorf("expected prof3 to be locked due to Cooldown")
 	}
 }
+
+func TestCandidateUsableAndRecovery(t *testing.T) {
+	now := time.Now()
+	rfc := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
+	week := QuotaWindow{Remaining: 0, ResetTime: rfc(2 * 24 * time.Hour)}
+	disabled5h := QuotaWindow{Remaining: 1, Disabled: true}
+
+	// Claude weekly gone, Gemini healthy: still usable.
+	c := evaluateProfileCandidate(ProfileInfo{ProfileName: "a"}, ProfileQuota{
+		ClaudeRemaining: 1, ClaudeHasSummary: true, Claude5h: disabled5h, ClaudeWeekly: week,
+		GeminiRemaining: 1, GeminiResetTime: rfc(4 * time.Hour),
+	}, now)
+	if !candidateUsable(c) {
+		t.Errorf("Gemini has quota, candidate should be usable")
+	}
+
+	// Both models out: not usable, recovery is the soonest reset.
+	c = evaluateProfileCandidate(ProfileInfo{ProfileName: "b"}, ProfileQuota{
+		ClaudeRemaining: 1, ClaudeHasSummary: true, Claude5h: disabled5h, ClaudeWeekly: week,
+		GeminiRemaining: 0, GeminiResetTime: rfc(5 * time.Hour),
+	}, now)
+	if candidateUsable(c) {
+		t.Errorf("both models exhausted, candidate should not be usable")
+	}
+	if d := candidateRecovery(c); d < 4*time.Hour || d > 5*time.Hour+time.Minute {
+		t.Errorf("recovery = %v, want about 5h (Gemini reset is sooner than Claude weekly)", d)
+	}
+
+	if d := candidateRecovery(SmartCandidate{}); d != 0 {
+		t.Errorf("no reset times should give 0, got %v", d)
+	}
+}
+
+func TestFormatShortDuration(t *testing.T) {
+	cases := map[time.Duration]string{
+		42 * time.Minute:             "42m",
+		3*time.Hour + 5*time.Minute:  "3h05m",
+		2*24*time.Hour + 7*time.Hour: "2d07h",
+	}
+	for d, want := range cases {
+		if got := formatShortDuration(d); got != want {
+			t.Errorf("formatShortDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}

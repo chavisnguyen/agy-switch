@@ -441,11 +441,22 @@ func switchNextProfile(reason string) (string, error) {
 	}
 
 	// 1. Try smart burn / balanced selection based on real-time 5h vs weekly quota
-	if smartName, reason := selectSmartProfile(profiles, activeProfileName, true); smartName != "" {
+	smartName, reason, exhausted := selectSmartProfileDetailed(profiles, activeProfileName, true)
+	if smartName != "" {
 		if err := switchProfileByName(smartName); err == nil {
 			fmt.Print(colorize(fmt.Sprintf("🎯 Smart Selection: %s (%s)", smartName, reason), ColorBold+ColorCyan) + "\r\n")
 			return smartName, nil
 		}
+	}
+
+	// If the server says no other account has any quota left, rotating would only
+	// bounce between dead accounts (and wipe their cooldowns), so stay put.
+	if exhausted.All {
+		msg := "no other account has quota left"
+		if exhausted.SoonestName != "" {
+			msg += fmt.Sprintf("; '%s' recovers first, in %s", exhausted.SoonestName, formatShortDuration(exhausted.Soonest))
+		}
+		return "", fmt.Errorf("%s", msg)
 	}
 
 	// 2. Fallback to Round-robin selection: pick next non-cooldown profile
@@ -654,4 +665,16 @@ func switchProfileByName(name string) error {
 	}
 
 	return nil
+}
+
+// formatShortDuration renders d as "XdYYh", "XhYYm" or "Xm".
+func formatShortDuration(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		return fmt.Sprintf("%dd%02dh", int(d.Hours())/24, int(d.Hours())%24)
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
 }

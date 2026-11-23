@@ -124,9 +124,10 @@ func handleRateLimitTrigger(sourceLine, sessionProfile string) {
 		label = "unknown"
 	}
 
-	// 1. Mark the account this session was using as exhausted for 30 minutes
+	// 1. Mark the account this session was using as exhausted. Normally for 30 minutes,
+	//    but when the server says it has no quota left at all, until the first window resets.
 	if exhausted != "" {
-		setProfileCooldown(exhausted, 30*time.Minute)
+		setProfileCooldown(exhausted, cooldownDuration(exhausted))
 	}
 
 	// 2. If the machine was already moved off the exhausted account (by another window) onto a
@@ -154,4 +155,37 @@ func handleRateLimitTrigger(sourceLine, sessionProfile string) {
 	fmt.Print(colorize("⚡ "+successMsg, ColorBold+ColorGreen) + "\r\n")
 	fmt.Printf("   Reason log: %s\r\n", colorize(strings.TrimSpace(sourceLine), ColorDim))
 	sendMacOSNotification("agys: Quota Auto-Switch", successMsg)
+}
+
+// defaultCooldown is how long an account rests after a rate limit when its real
+// recovery time is unknown.
+const defaultCooldown = 30 * time.Minute
+
+// cooldownDuration returns how long to rest the named account. If live quota shows
+// every model on it exhausted, the cooldown lasts until the first window resets
+// (never less than defaultCooldown); otherwise, or if quota cannot be read, it is
+// defaultCooldown.
+func cooldownDuration(name string) time.Duration {
+	profiles, err := getAllProfiles()
+	if err != nil {
+		return defaultCooldown
+	}
+	for _, p := range profiles {
+		if p.ProfileName != name {
+			continue
+		}
+		q, ok := fetchAllProfilesQuota([]ProfileInfo{p}, 3*time.Second)[p.ProfileName]
+		if !ok || q.Err != nil {
+			return defaultCooldown
+		}
+		c := evaluateProfileCandidate(p, q, time.Now())
+		if candidateUsable(c) {
+			return defaultCooldown
+		}
+		if d := candidateRecovery(c); d > defaultCooldown {
+			return d
+		}
+		return defaultCooldown
+	}
+	return defaultCooldown
 }

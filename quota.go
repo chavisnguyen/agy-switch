@@ -605,23 +605,58 @@ func evaluateProfileCandidate(p ProfileInfo, q ProfileQuota, now time.Time) Smar
 // selectSmartProfile picks the best profile to switch to or burn.
 // If excludeCurrent is true, it only considers non-active profiles.
 func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCurrent bool) (string, string) {
+	name, reason, _ := selectSmartProfileDetailed(profiles, activeProfile, excludeCurrent)
+	return name, reason
+}
+
+// exhaustionInfo reports whether every considered account is out of quota.
+// All is only true when every account's quota was fetched successfully and none
+// has a usable Claude or Gemini bucket; an unreachable account counts as unknown.
+type exhaustionInfo struct {
+	All         bool
+	SoonestName string
+	Soonest     time.Duration // time until the first account recovers; 0 when unknown
+}
+
+// candidateUsable reports whether any model has quota left, ignoring cooldowns:
+// a cooldown is a local guess, the quota is what the server actually enforces.
+func candidateUsable(c SmartCandidate) bool {
+	return c.ClaudeRemaining >= 0.05 || c.GeminiRemaining >= 0.05
+}
+
+// candidateRecovery is the shortest time until one of the candidate's exhausted
+// windows resets, or 0 when no reset time is known.
+func candidateRecovery(c SmartCandidate) time.Duration {
+	var best time.Duration
+	for _, d := range []time.Duration{c.ClaudeDiff, c.GeminiDiff} {
+		if d > 0 && (best == 0 || d < best) {
+			best = d
+		}
+	}
+	return best
+}
+
+func selectSmartProfileDetailed(profiles []ProfileInfo, activeProfile string, excludeCurrent bool) (string, string, exhaustionInfo) {
+	var ex exhaustionInfo
 	if len(profiles) <= 1 {
-		return "", ""
+		return "", "", ex
 	}
 
 	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
 	if len(quotas) == 0 {
-		return "", ""
+		return "", "", ex
 	}
 
 	now := time.Now()
 	var candidates []SmartCandidate
+	unknown := false
 	for _, p := range profiles {
 		if excludeCurrent && p.ProfileName == activeProfile {
 			continue
 		}
 		q := quotas[p.ProfileName]
 		if q.Err != nil {
+			unknown = true
 			continue
 		}
 		cand := evaluateProfileCandidate(p, q, now)
@@ -629,7 +664,21 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 	}
 
 	if len(candidates) == 0 {
-		return "", ""
+		return "", "", ex
+	}
+
+	if !unknown {
+		ex.All = true
+		for _, c := range candidates {
+			if candidateUsable(c) {
+				ex.All = false
+				break
+			}
+			if d := candidateRecovery(c); d > 0 && (ex.Soonest == 0 || d < ex.Soonest) {
+				ex.Soonest = d
+				ex.SoonestName = c.Profile.ProfileName
+			}
+		}
 	}
 
 	// 1. Check for URGENT BURN (Claude expiring within 90 minutes with remaining >= 10%)
@@ -648,7 +697,7 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 	if urgentCand != nil {
 		m := int(urgentCand.ClaudeDiff.Minutes())
 		reason := fmt.Sprintf("🔥 Claude %.1f%% expiring soonest (in %dm [5h]) - burn before reset!", urgentCand.ClaudeRemaining*100, m)
-		return urgentCand.Profile.ProfileName, reason
+		return urgentCand.Profile.ProfileName, reason, ex
 	}
 
 	// 2. Normal 5h cycle Claude candidates (healthy, !IsClaudeWeekly, ClaudeRemaining >= 0.05)
@@ -677,7 +726,7 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 		m := int(best5h.ClaudeDiff.Minutes()) % 60
 		durStr := fmt.Sprintf("%dh%02dm", h, m)
 		reason := fmt.Sprintf("Claude %.1f%% in [5h] cycle (resets in %s) - optimal balance", best5h.ClaudeRemaining*100, durStr)
-		return best5h.Profile.ProfileName, reason
+		return best5h.Profile.ProfileName, reason, ex
 	}
 
 	// 3. Fallback to Gemini candidates if Claude is exhausted across accounts
@@ -693,10 +742,10 @@ func selectSmartProfile(profiles []ProfileInfo, activeProfile string, excludeCur
 	}
 	if bestGemini != nil {
 		reason := fmt.Sprintf("Gemini %.1f%% available (Claude depleted)", bestGemini.GeminiRemaining*100)
-		return bestGemini.Profile.ProfileName, reason
+		return bestGemini.Profile.ProfileName, reason, ex
 	}
 
-	return "", ""
+	return "", "", ex
 }
 
 // fetchRawQuotaSummary returns the unparsed retrieveUserQuotaSummary body for
