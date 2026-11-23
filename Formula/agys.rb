@@ -1,8 +1,8 @@
 class Agys < Formula
   desc "Switch and auto-failover between Antigravity (AGY) accounts"
   homepage "https://github.com/chavisnguyen/agy-switch"
-  url "https://github.com/chavisnguyen/agy-switch/archive/refs/tags/v1.0.16.tar.gz"
-  sha256 "6e1772bef06aaa69c551c75cad68751be52413d6368c5a0259fd1bf9487048d1"
+  url "https://github.com/chavisnguyen/agy-switch/archive/refs/tags/v1.0.17.tar.gz"
+  sha256 "86f42e0734e60b8936918428e1f4042b4b04332ce26f863b2b70cfd79db72f30"
 
   depends_on "go" => :build
 
