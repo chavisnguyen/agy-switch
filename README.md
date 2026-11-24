@@ -12,17 +12,17 @@ One small Go binary. No telemetry: tokens never leave your disk.
 ## Install
 
 ```bash
-brew tap chavisnguyen/agy-switch https://github.com/chavisnguyen/agy-switch
+brew tap chavisnguyen/agys https://github.com/chavisnguyen/agys
 brew install agys
 ```
 
 No Homebrew? Download the binary for your machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chavisnguyen/agy-switch/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chavisnguyen/agys/master/install.sh | bash
 ```
 
-Or build it (needs a recent Go, see `go.mod`): `git clone https://github.com/chavisnguyen/agy-switch && cd agy-switch && make install`.
+Or build it (needs a recent Go, see `go.mod`): `git clone https://github.com/chavisnguyen/agys && cd agys && make install`.
 
 Already installed another way? Remove the old binary first (`rm /opt/homebrew/bin/agys`), or `brew install` will report a conflict.
 
@@ -200,7 +200,7 @@ agys update                           # installed with install.sh or make instal
 ## Uninstall
 
 ```bash
-brew uninstall agys && brew untap chavisnguyen/agy-switch
+brew uninstall agys && brew untap chavisnguyen/agys
 ```
 
 Your saved profiles stay in `~/.gemini/antigravity-cli/profiles/` (they hold your login tokens). Delete that folder too if you want them gone.

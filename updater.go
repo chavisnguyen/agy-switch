@@ -18,7 +18,7 @@ var Version = "v1.0.17"
 
 const (
 	repoOwner = "chavisnguyen"
-	repoName  = "agy-switch"
+	repoName  = "agys"
 )
 
 type githubRelease struct {

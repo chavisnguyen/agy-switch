@@ -1,4 +1,4 @@
-module agy-switch
+module agys
 
 go 1.26.0
 

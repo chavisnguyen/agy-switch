@@ -8,7 +8,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 RESET='\033[0m'
 
-REPO="chavisnguyen/agy-switch"
+REPO="chavisnguyen/agys"
 BINARY_NAME="agys"
 
 echo -e "${CYAN}==> Installing ${BINARY_NAME}...${RESET}"
@@ -40,7 +40,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 TARGET_FILE="$TEMP_DIR/$BINARY_NAME"
 
 # Check if Go is installed and we are inside source tree
-if command -v go >/dev/null 2>&1 && [ -f "go.mod" ] && grep -q "agy-switch" "go.mod" 2>/dev/null; then
+if command -v go >/dev/null 2>&1 && [ -f "go.mod" ] && grep -q "^module agys$" "go.mod" 2>/dev/null; then
     echo -e "${CYAN}==> Go detected in source repo. Compiling from source...${RESET}"
     go build -ldflags="-s -w" -o "$TARGET_FILE" .
     echo -e "${GREEN}✓ Local build succeeded.${RESET}"
