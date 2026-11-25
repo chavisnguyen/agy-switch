@@ -357,18 +357,6 @@ func formatQuotaBadge(fraction float64, err error) string {
 	return colorize("🔴 "+str, ColorRed)
 }
 
-func formatResetTime(resetStr string) string {
-	if resetStr == "" {
-		return "-"
-	}
-	t, err := time.Parse(time.RFC3339, resetStr)
-	if err != nil {
-		return resetStr
-	}
-	local := t.Local()
-	return local.Format("02 Jan 15:04")
-}
-
 func formatQuotaReset(resetStr string) string {
 	if resetStr == "" {
 		return ""
@@ -411,49 +399,6 @@ func formatQuotaReset(resetStr string) string {
 	return fmt.Sprintf(" (resets %s, %s [Weekly Cap ⚠️])", local.Format("02 Jan 15:04"), leftStr)
 }
 
-// formatBucketReset formats a reset timestamp for a bucket whose window
-// (5h vs weekly) is already known, instead of inferring it from the time
-// remaining (which formatQuotaReset does for the single-window fallback).
-func formatBucketReset(resetStr string, isWeekly bool) string {
-	if resetStr == "" {
-		return ""
-	}
-	t, err := time.Parse(time.RFC3339, resetStr)
-	if err != nil {
-		return fmt.Sprintf(" (resets %s)", resetStr)
-	}
-
-	diff := time.Until(t)
-	local := t.Local()
-
-	if !isWeekly {
-		if diff <= 0 {
-			return fmt.Sprintf(" (resets %s [5h])", local.Format("15:04"))
-		}
-		h := int(diff.Hours())
-		m := int(diff.Minutes()) % 60
-		durStr := fmt.Sprintf("in %dh%02dm", h, m)
-		if h == 0 {
-			durStr = fmt.Sprintf("in %dm", m)
-		}
-		return fmt.Sprintf(" (resets %s %s [5h])", local.Format("15:04"), durStr)
-	}
-
-	if diff <= 0 {
-		return fmt.Sprintf(" (resets %s [1w])", local.Format("02 Jan 15:04"))
-	}
-	days := int((diff + 12*time.Hour).Hours() / 24)
-	leftStr := ""
-	if days > 1 {
-		leftStr = fmt.Sprintf("%dd left", days)
-	} else if days == 1 {
-		leftStr = "1d left"
-	} else {
-		leftStr = fmt.Sprintf("%dh left", int(diff.Hours()))
-	}
-	return fmt.Sprintf(" (resets %s, %s [1w])", local.Format("02 Jan 15:04"), leftStr)
-}
-
 // formatQuotaBar renders a fixed-width progress bar for a remaining fraction
 // (0..1), colored by severity (green/yellow/red), for compact side-by-side
 // 5h vs weekly comparison in `agys status`.
@@ -493,8 +438,8 @@ func quotaStatusEmoji(remaining float64) string {
 	return "🔴"
 }
 
-// formatBucketResetCompact is like formatBucketReset but without the
-// "(resets ... [5h/1w])" wrapper, for use next to a bar where the window
+// formatBucketResetCompact formats a reset timestamp for a bucket whose window
+// (5h vs weekly) is already known, for use next to a quota bar where the window
 // label is already shown separately.
 func formatBucketResetCompact(resetStr string, isWeekly bool) string {
 	if resetStr == "" {

@@ -525,8 +525,12 @@ func switchNextProfile(reason string) (string, error) {
 	return selected, nil
 }
 
+func keychainDisabled() bool {
+	return runtime.GOOS != "darwin" || os.Getenv("AGYS_SKIP_KEYCHAIN") == "1"
+}
+
 func getKeychainPassword() string {
-	if runtime.GOOS != "darwin" {
+	if keychainDisabled() {
 		return ""
 	}
 	out, err := exec.Command("security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w").Output()
@@ -566,7 +570,7 @@ func parseKeychainToken(rawKeychain string) (*OAuthTokenFile, string, error) {
 }
 
 func setKeychainPassword(pw string) error {
-	if runtime.GOOS != "darwin" || pw == "" {
+	if keychainDisabled() || pw == "" {
 		return nil
 	}
 	cmd := exec.Command("security", "add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", pw)
@@ -574,7 +578,7 @@ func setKeychainPassword(pw string) error {
 }
 
 func deleteKeychainPassword() error {
-	if runtime.GOOS != "darwin" {
+	if keychainDisabled() {
 		return nil
 	}
 	cmd := exec.Command("security", "delete-generic-password", "-s", "gemini", "-a", "antigravity")
@@ -582,7 +586,7 @@ func deleteKeychainPassword() error {
 }
 
 func syncKeychainFromTokenFile(tokenFile OAuthTokenFile, email string) error {
-	if runtime.GOOS != "darwin" {
+	if keychainDisabled() {
 		return nil
 	}
 	type KeyringPayload struct {

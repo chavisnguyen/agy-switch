@@ -23,6 +23,35 @@ var convUUIDRegex = regexp.MustCompile(`(?i)(?:Streaming conversation|Resuming c
 // for before assuming it ignored the flag.
 const runLogWaitBeforeFallback = 5 * time.Second
 
+// runLogMaxAge bounds how long per-session agys-run-*.log files are kept on disk.
+const runLogMaxAge = 7 * 24 * time.Hour
+
+// cleanOldRunLogs removes per-session agys-run-*.log files older than maxAge,
+// leaving agy's own cli*.log files untouched.
+func cleanOldRunLogs(logDir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "agys-run-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(logDir, name))
+		}
+	}
+}
+
 // extractLogFileArg returns the value of a user-supplied --log-file / -log-file argument
 // (both "--log-file path" and "--log-file=path" forms), or "" if absent.
 func extractLogFileArg(args []string) string {
@@ -196,6 +225,7 @@ func setTerminalTitle(title string) {
 // cmdRun runs agy as a child process and monitors for rate limit errors in real-time.
 // If a rate-limit occurs, it automatically switches profiles and auto-resumes the conversation.
 func cmdRun(customArgs []string) {
+	cleanOldRunLogs(filepath.Join(getPaths().CLIHome, "log"), runLogMaxAge)
 	fmt.Print(colorize("🚀 agys runner: Launching agy with Auto-Failover enabled...", ColorBold+ColorCyan) + "\r\n")
 
 	activeConvID := extractConversationID(customArgs)

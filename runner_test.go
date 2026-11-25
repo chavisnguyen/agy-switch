@@ -1,8 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractConversationID(t *testing.T) {
@@ -155,5 +158,54 @@ func TestNewRunLogPathIsUniquePerAttempt(t *testing.T) {
 	}
 	if !strings.Contains(a, "agys-run-") {
 		t.Errorf("unexpected log path %q", a)
+	}
+}
+
+func TestCleanOldRunLogs(t *testing.T) {
+	dir := t.TempDir()
+	oldRun := filepath.Join(dir, "agys-run-20260101_000000-123-1.log")
+	freshRun := filepath.Join(dir, "agys-run-20261125_110000-456-1.log")
+	agyOwnLog := filepath.Join(dir, "cli-20260101.log")
+
+	for _, p := range []string{oldRun, freshRun, agyOwnLog} {
+		if err := os.WriteFile(p, []byte("log"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-10 * 24 * time.Hour)
+	_ = os.Chtimes(oldRun, past, past)
+	_ = os.Chtimes(agyOwnLog, past, past)
+
+	cleanOldRunLogs(dir, 7*24*time.Hour)
+
+	if _, err := os.Stat(oldRun); !os.IsNotExist(err) {
+		t.Errorf("expected old agys-run log to be removed")
+	}
+	if _, err := os.Stat(freshRun); err != nil {
+		t.Errorf("expected fresh agys-run log to be kept: %v", err)
+	}
+	if _, err := os.Stat(agyOwnLog); err != nil {
+		t.Errorf("expected agy's own cli-*.log to remain untouched: %v", err)
+	}
+}
+
+func TestParseChecksumForAsset(t *testing.T) {
+	sample := `
+# release checksums
+aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899  agys-darwin-arm64
+1111111111111111111111111111111111111111111111111111111111111111 *agys-linux-amd64
+2222222222222222222222222222222222222222222222222222222222222222  ./agys-darwin-amd64
+`
+	if got, ok := parseChecksumForAsset(sample, "agys-darwin-arm64"); !ok || got != "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899" {
+		t.Errorf("unexpected darwin-arm64 hash: %q (%v)", got, ok)
+	}
+	if got, ok := parseChecksumForAsset(sample, "agys-linux-amd64"); !ok || got != strings.Repeat("1", 64) {
+		t.Errorf("unexpected linux-amd64 hash: %q (%v)", got, ok)
+	}
+	if got, ok := parseChecksumForAsset(sample, "agys-darwin-amd64"); !ok || got != strings.Repeat("2", 64) {
+		t.Errorf("unexpected darwin-amd64 hash: %q (%v)", got, ok)
+	}
+	if _, ok := parseChecksumForAsset(sample, "agys-linux-arm64"); ok {
+		t.Errorf("expected missing asset to return ok=false")
 	}
 }

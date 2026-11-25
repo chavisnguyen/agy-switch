@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var Version = "v1.0.17"
+var Version = "v1.0.18"
 
 const (
 	repoOwner = "chavisnguyen"
@@ -187,6 +187,11 @@ func cmdUpdate() {
 	}
 	tempFile.Close()
 
+	if err := verifyAssetChecksum(dlCtx, latest, assetName, tempPath); err != nil {
+		fmt.Printf("%s %v\n", colorize("❌", ColorRed), err)
+		return
+	}
+
 	if err := os.Chmod(tempPath, 0755); err != nil {
 		fmt.Printf("%s Failed to set executable permissions: %v\n", colorize("❌", ColorRed), err)
 		return
@@ -250,25 +255,85 @@ func saveUpdateCache(cache updateCache) {
 	_ = os.WriteFile(cachePath, data, 0644)
 }
 
-// CheckUpdateNotice checks if an update notice should be printed (non-blocking, fast)
-func CheckUpdateNotice() {
+// parseChecksumForAsset extracts the expected SHA-256 hex digest for assetName
+// from a sha256sum-formatted checksums.txt body.
+func parseChecksumForAsset(content, assetName string) (string, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		target := strings.TrimPrefix(fields[1], "*")
+		target = strings.TrimPrefix(target, "./")
+		if target == assetName {
+			return strings.ToLower(fields[0]), true
+		}
+	}
+	return "", false
+}
+
+func verifyAssetChecksum(ctx context.Context, versionTag, assetName, filePath string) error {
+	checksumsURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/checksums.txt", repoOwner, repoName, versionTag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumsURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build checksum request: %w", err)
+	}
+	req.Header.Set("User-Agent", "agys-updater")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to download checksums.txt: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Printf("%s Release %s has no checksums.txt; skipping SHA-256 verification.\n", colorize("⚠️", ColorYellow), versionTag)
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch checksums.txt (HTTP %d)", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read checksums.txt: %w", err)
+	}
+
+	expectedHash, ok := parseChecksumForAsset(string(body), assetName)
+	if !ok {
+		return fmt.Errorf("checksum for %s not found in checksums.txt", assetName)
+	}
+
+	actualHash, err := getFileSHA256(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to compute SHA-256 of downloaded binary: %w", err)
+	}
+
+	if !strings.EqualFold(actualHash, expectedHash) {
+		return fmt.Errorf("SHA-256 checksum mismatch for %s (expected %s, got %s)", assetName, expectedHash, actualHash)
+	}
+
+	fmt.Printf("%s Verified SHA-256 checksum.\n", colorize("✓", ColorGreen))
+	return nil
+}
+
+// StartUpdateCheck starts a background release check when the local cache is missing
+// or older than 24h, returning a function that waits up to waitTimeout for completion
+// and prints an upgrade notice if a newer release is available.
+func StartUpdateCheck() func(waitTimeout time.Duration) {
+	if os.Getenv("AGYS_NO_UPDATE_CHECK") != "" {
+		return func(time.Duration) {}
+	}
+
 	cache, found := loadUpdateCache()
 	now := time.Now().Unix()
 
-	// If cached version is newer, print notice
-	if found && isNewerVersion(Version, cache.LatestVersion) {
-		fmt.Println()
-		fmt.Printf("%s A new version of agys is available: %s -> %s\n",
-			colorize("💡", ColorYellow),
-			Version,
-			colorize(cache.LatestVersion, ColorBold+ColorGreen))
-		fmt.Printf("   Run %s to upgrade.\n\n", colorize("agys update", ColorCyan))
-	}
-
-	// Refresh cache in background if older than 24h
+	done := make(chan struct{})
 	if !found || (now-cache.LastCheck) > 86400 {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer close(done)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			rel, err := fetchLatestRelease(ctx)
 			if err == nil && rel != nil {
@@ -278,5 +343,23 @@ func CheckUpdateNotice() {
 				})
 			}
 		}()
+	} else {
+		close(done)
+	}
+
+	return func(waitTimeout time.Duration) {
+		select {
+		case <-done:
+		case <-time.After(waitTimeout):
+		}
+
+		if c, ok := loadUpdateCache(); ok && isNewerVersion(Version, c.LatestVersion) {
+			fmt.Println()
+			fmt.Printf("%s A new version of agys is available: %s -> %s\n",
+				colorize("💡", ColorYellow),
+				Version,
+				colorize(c.LatestVersion, ColorBold+ColorGreen))
+			fmt.Printf("   Run %s to upgrade.\n\n", colorize("agys update", ColorCyan))
+		}
 	}
 }

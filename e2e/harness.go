@@ -48,6 +48,49 @@ type Harness struct {
 	mu          sync.Mutex
 }
 
+var (
+	buildOnce     sync.Once
+	sharedAgysBin string
+	buildAgysErr  error
+)
+
+func TestMain(m *testing.M) {
+	binTmpDir, err := os.MkdirTemp("", "agys-e2e-bin-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create temp bin dir: %v\n", err)
+		os.Exit(1)
+	}
+	sharedAgysBin = filepath.Join(binTmpDir, "agys")
+
+	wd, err := os.Getwd()
+	if err != nil {
+		_ = os.RemoveAll(binTmpDir)
+		fmt.Fprintf(os.Stderr, "Failed to get working directory: %v\n", err)
+		os.Exit(1)
+	}
+	rootDir := wd
+	if filepath.Base(wd) == "e2e" {
+		rootDir = filepath.Dir(wd)
+	}
+
+	buildOnce.Do(func() {
+		cmd := exec.Command("go", "build", "-o", sharedAgysBin, ".")
+		cmd.Dir = rootDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			buildAgysErr = fmt.Errorf("%w\nOutput: %s", err, string(out))
+		}
+	})
+	if buildAgysErr != nil {
+		_ = os.RemoveAll(binTmpDir)
+		fmt.Fprintf(os.Stderr, "Failed to build fresh agys binary: %v\n", buildAgysErr)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	_ = os.RemoveAll(binTmpDir)
+	os.Exit(code)
+}
+
 // NewHarness initializes a clean, fully isolated black-box testing sandbox.
 func NewHarness(t *testing.T) *Harness {
 	wd, err := os.Getwd()
@@ -60,13 +103,12 @@ func NewHarness(t *testing.T) *Harness {
 		rootDir = filepath.Dir(wd)
 	}
 
-	agysBin := filepath.Join(rootDir, "agys")
-	if _, err := os.Stat(agysBin); os.IsNotExist(err) {
-		// Build agys binary first
-		cmd := exec.Command("go", "build", "-o", "agys", ".")
+	agysBin := sharedAgysBin
+	if agysBin == "" {
+		agysBin = filepath.Join(t.TempDir(), "agys")
+		cmd := exec.Command("go", "build", "-o", agysBin, ".")
 		cmd.Dir = rootDir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
+		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("Failed to build agys binary: %v\nOutput: %s", err, string(out))
 		}
 	}
@@ -316,11 +358,15 @@ func (h *Harness) CreateFakeGoogleAccount(profileName, email, name, tokenSecret 
 	idToken := fmt.Sprintf("%s.%s.fakesignature", header, payload)
 
 	tokenJSON := map[string]interface{}{
-		"access_token":  fmt.Sprintf("ya29.fake-%s-%s", profileName, tokenSecret),
-		"refresh_token": fmt.Sprintf("1//fake-refresh-%s", profileName),
-		"token_type":    "Bearer",
-		"expiry":        time.Now().Add(24 * time.Hour).Format(time.RFC3339),
-		"id_token":      idToken,
+		"token": map[string]interface{}{
+			"access_token":  fmt.Sprintf("ya29.fake-%s-%s", profileName, tokenSecret),
+			"refresh_token": fmt.Sprintf("1//fake-refresh-%s", profileName),
+			"token_type":    "Bearer",
+			"expiry":        time.Now().Add(24 * time.Hour).Format(time.RFC3339),
+		},
+		"auth_method":    "consumer",
+		"id_token":       idToken,
+		"id_token_email": email,
 	}
 
 	data, err := json.MarshalIndent(tokenJSON, "", "  ")
@@ -389,6 +435,7 @@ func (h *Harness) RunAgysWithInput(input string, timeout time.Duration, args ...
 	cmd.Env = append(os.Environ(),
 		"HOME="+h.TempDir,
 		"PATH="+pathEnv,
+		"AGYS_NO_UPDATE_CHECK=1",
 		"MOCK_AGY_STATE="+h.StateFile,
 		"MOCK_AGY_EXEC_LOG="+h.ExecLogFile,
 		"MOCK_AGY_CLI_LOG="+h.CliLogPath,
@@ -477,6 +524,7 @@ func (h *Harness) StartAgys(s *MockSession, args ...string) *RunningAgys {
 	r.cmd.Env = append(os.Environ(),
 		"HOME="+h.TempDir,
 		"PATH="+pathEnv,
+		"AGYS_NO_UPDATE_CHECK=1",
 		"MOCK_AGY_STATE="+h.StateFile,
 		"MOCK_AGY_EXEC_LOG="+h.ExecLogFile,
 		"MOCK_AGY_CLI_LOG="+h.CliLogPath,

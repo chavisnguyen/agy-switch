@@ -212,9 +212,6 @@ func cmdNext() {
 	fmt.Println()
 }
 
-// printQuotaLine prints a model's quota. When the 5h/weekly split from
-// retrieveUserQuotaSummary is available it prints both windows on two lines;
-// otherwise it falls back to the single combined window from fetchAvailableModels.
 // printQuotaLine prints a model's quota as a progress bar. When the 5h/weekly
 // split from retrieveUserQuotaSummary is available it prints both windows on
 // two aligned bar lines; otherwise it falls back to a single combined-window
@@ -256,7 +253,8 @@ func printQuotaBarLine(prefix, label string, remaining float64, resetInfo string
 	fmt.Println(line)
 }
 
-func cmdCurrent() {	profiles, _ := getAllProfiles()
+func cmdCurrent() {
+	profiles, _ := getAllProfiles()
 	if len(profiles) == 0 {
 		fmt.Println()
 		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
@@ -264,6 +262,7 @@ func cmdCurrent() {	profiles, _ := getAllProfiles()
 		return
 	}
 
+	finishUpdateCheck := StartUpdateCheck()
 	quotas := fetchAllProfilesQuota(profiles, 5*time.Second)
 
 	fmt.Println()
@@ -298,105 +297,7 @@ func cmdCurrent() {	profiles, _ := getAllProfiles()
 
 	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
 	fmt.Println()
-	CheckUpdateNotice()
-}
-
-func cmdBurn() {
-	profiles, _ := getAllProfiles()
-	if len(profiles) == 0 {
-		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
-		return
-	}
-
-	fmt.Println()
-	fmt.Println(colorize("🔥 AGYS SMART BURN: 5H VS WEEKLY CAP OPTIMIZER", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 88), ColorDim))
-	fmt.Println("Scanning real-time quotas, 5h burst windows, and 7-day Weekly Caps...")
-	fmt.Println()
-
-	quotas := fetchAllProfilesQuota(profiles, 5*time.Second)
-	now := time.Now()
-
-	header := fmt.Sprintf("%-4s %-14s %-14s %-14s %-18s %-18s", "ID", "PROFILE", "CLAUDE", "GEMINI", "CYCLE", "RECOMMENDATION")
-	fmt.Println(header)
-	fmt.Println(colorize(strings.Repeat("─", 88), ColorDim))
-
-	activeProfile := ""
-	for _, p := range profiles {
-		if p.IsActive {
-			activeProfile = p.ProfileName
-			break
-		}
-	}
-
-	for idx, p := range profiles {
-		q := quotas[p.ProfileName]
-		cand := evaluateProfileCandidate(p, q, now)
-
-		pName := p.ProfileName
-		if p.IsActive {
-			pName = colorize(pName, ColorBold)
-		}
-
-		claudeBadge := formatQuotaBadge(q.ClaudeRemaining, q.Err)
-		geminiBadge := formatQuotaBadge(q.GeminiRemaining, q.Err)
-
-		cycleTag := colorize("[5h Cycle]", ColorGreen)
-		if cand.IsClaudeWeekly && cand.ClaudeRemaining < 0.05 {
-			cycleTag = colorize("[Weekly Cap ⚠️]", ColorRed)
-		} else if cand.IsClaudeWeekly {
-			cycleTag = colorize("[Weekly Cap ⚠️]", ColorYellow)
-		}
-
-		recommendation := colorize("○ Eligible", ColorDim)
-		if p.IsActive {
-			recommendation = colorize("● ACTIVE", ColorBold+ColorGreen)
-		} else if cand.IsLocked {
-			recommendation = colorize("❌ "+cand.LockReason, ColorRed)
-		} else if cand.IsClaudeWeekly && cand.ClaudeRemaining < 0.05 {
-			recommendation = colorize("⚠️ Claude locked (Gemini only)", ColorYellow)
-		} else if cand.ClaudeDiff > 0 && cand.ClaudeDiff <= 90*time.Minute && cand.ClaudeRemaining >= 0.10 {
-			recommendation = colorize("🔥 URGENT BURN", ColorBold+ColorYellow)
-		}
-
-		sttStr := fmt.Sprintf("[%2d]", idx+1)
-		line := fmt.Sprintf("%-4s %-14s %-14s %-14s %-18s %s",
-			sttStr,
-			padRight(pName, 14),
-			padRight(claudeBadge, 14),
-			padRight(geminiBadge, 14),
-			padRight(cycleTag, 18),
-			recommendation,
-		)
-		fmt.Println(line)
-	}
-
-	fmt.Println(colorize(strings.Repeat("─", 88), ColorDim))
-	fmt.Println()
-
-	// Find best burn candidate (including active profile to see if active is already best)
-	bestOverall, reasonOverall := selectSmartProfile(profiles, "", false)
-	if bestOverall == "" {
-		fmt.Println(colorize("⚠️  No eligible candidate found with healthy quota. All accounts may be cooling down or exhausted.", ColorYellow))
-		return
-	}
-
-	if bestOverall == activeProfile {
-		fmt.Println(colorize(fmt.Sprintf("✅ Active account '%s' is ALREADY the optimal burn candidate!", activeProfile), ColorBold+ColorGreen))
-		fmt.Printf("   Reason: %s\n\n", colorize(reasonOverall, ColorCyan))
-		return
-	}
-
-	fmt.Println(colorize(fmt.Sprintf("🚀 Switching to optimal burn candidate: '%s'", strings.ToUpper(bestOverall)), ColorBold+ColorGreen))
-	fmt.Printf("   Reason: %s\n\n", colorize(reasonOverall, ColorCyan))
-
-	if err := switchProfileByName(bestOverall); err != nil {
-		fmt.Println(colorize(fmt.Sprintf("❌ Switch failed: %v", err), ColorRed))
-		return
-	}
-
-	fmt.Println(colorize(fmt.Sprintf("🎉 Successfully switched to '%s'!", bestOverall), ColorBold+ColorGreen))
-	fmt.Println()
+	finishUpdateCheck(800 * time.Millisecond)
 }
 
 func selectProfileInteractive(profiles []ProfileInfo) int {
@@ -844,6 +745,8 @@ MANAGEMENT:
   agys save [name]             Save current active session as a profile
   agys rename <old> <new>      Rename a saved profile
   agys remove <name>           Delete a profile
+  agys export [file]           Export all saved profiles to a portable JSON bundle
+  agys import <file>           Import profiles from a bundle (--overwrite to replace existing)
   agys cooldown [clear]        View or reset profile cooldowns
 
 UTILITY:
@@ -920,6 +823,10 @@ func main() {
 			return
 		}
 		cmdRemove(args[1])
+	case "export":
+		cmdExport(args[1:])
+	case "import":
+		cmdImport(args[1:])
 	case "update", "upgrade":
 		cmdUpdate()
 	case "version", "--version", "-v":

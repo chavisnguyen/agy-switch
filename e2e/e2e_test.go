@@ -15,11 +15,14 @@ import (
 func TestE2E_ProfileManagement_SaveAndStatus(t *testing.T) {
 	h := NewHarness(t)
 
-	// Create a dummy active token
+	// Create a dummy active token matching OAuthTokenFile schema
 	tokenContent := `{
-  "access_token": "ya29.active-save-test",
-  "refresh_token": "1//active-refresh",
-  "token_type": "Bearer",
+  "token": {
+    "access_token": "ya29.active-save-test",
+    "refresh_token": "1//active-refresh",
+    "token_type": "Bearer"
+  },
+  "auth_method": "consumer",
   "id_token": "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6ImRldjFfZW1haWxAZ21haWwuY29tIiwibmFtZSI6IkRldiBPbmUifQ.sig"
 }`
 	if err := h.SetActiveAccount("temp"); err != nil {
@@ -90,6 +93,13 @@ func TestE2E_ProfileManagement_ManualSwitch(t *testing.T) {
 		t.Fatalf("Expected active account 'work', got '%s'", curr)
 	}
 
+	// Simulate agy refreshing the access_token in the active token file while on 'work'
+	activeBeforeSwitch, _ := h.GetActiveTokenContent()
+	refreshedWorkToken := strings.ReplaceAll(activeBeforeSwitch, "ya29.fake-work-secret1", "ya29.fake-work-refreshed")
+	if err := writeTokenFile(h.TokenPath, refreshedWorkToken); err != nil {
+		t.Fatalf("Failed to simulate refreshed token: %v", err)
+	}
+
 	// Switch to personal
 	stdout, stderr, exitCode, err := h.RunAgys("personal")
 	if err != nil {
@@ -108,6 +118,15 @@ func TestE2E_ProfileManagement_ManualSwitch(t *testing.T) {
 	tokenContent, _ := h.GetActiveTokenContent()
 	if !strings.Contains(tokenContent, "ya29.fake-personal-secret2") {
 		t.Errorf("Active token was not swapped to personal token: %s", tokenContent)
+	}
+
+	// Verify refreshed access_token was synced back to work.json
+	workProfileBytes, err := os.ReadFile(filepath.Join(h.ProfilesDir, "work.json"))
+	if err != nil {
+		t.Fatalf("Failed to read work profile: %v", err)
+	}
+	if !strings.Contains(string(workProfileBytes), "ya29.fake-work-refreshed") {
+		t.Errorf("Expected refreshed access_token to be synced back to work.json, got: %s", string(workProfileBytes))
 	}
 }
 
@@ -717,7 +736,7 @@ func TestE2E_ProfileManagement_RenameNonExistent(t *testing.T) {
 func TestE2E_ProfileManagement_PathTraversalSanitization(t *testing.T) {
 	h := NewHarness(t)
 
-	tokenContent := `{"access_token":"ya29.safe-token","token_type":"Bearer"}`
+	tokenContent := `{"token":{"access_token":"ya29.safe-token","token_type":"Bearer"}}`
 	if err := writeTokenFile(h.TokenPath, tokenContent); err != nil {
 		t.Fatalf("Failed to write active token: %v", err)
 	}
@@ -737,9 +756,11 @@ func TestE2E_ProfileManagement_TokenWithoutIdToken(t *testing.T) {
 	h := NewHarness(t)
 
 	tokenJSON := `{
-  "access_token": "ya29.raw-token-without-jwt",
-  "refresh_token": "1//raw-refresh",
-  "token_type": "Bearer"
+  "token": {
+    "access_token": "ya29.raw-token-without-jwt",
+    "refresh_token": "1//raw-refresh",
+    "token_type": "Bearer"
+  }
 }`
 	profilePath := h.ProfilesDir + "/no_jwt.json"
 	if err := writeTokenFile(profilePath, tokenJSON); err != nil {
@@ -1097,5 +1118,72 @@ func TestE2E_Runner_TwoWindows_SameAccount_SingleSwitch(t *testing.T) {
 	}
 	if got := cooldownNames(h); len(got) != 1 || got[0] != "acc1" {
 		t.Errorf("only the exhausted account acc1 should be cooled down, got %v", got)
+	}
+}
+
+// TestE2E_Transfer_ExportAndImportAcrossMachines tests exporting accounts from machine A
+// and importing onto a fresh machine B as well as merging/overwriting on machine C.
+func TestE2E_Transfer_ExportAndImportAcrossMachines(t *testing.T) {
+	// Machine A: 2 accounts, 'personal' is active
+	hA := NewHarness(t)
+	if err := hA.CreateFakeGoogleAccount("work", "work@company.com", "Work", "sec_work_new"); err != nil {
+		t.Fatalf("create work: %v", err)
+	}
+	if err := hA.CreateFakeGoogleAccount("personal", "me@gmail.com", "Me", "sec_personal"); err != nil {
+		t.Fatalf("create personal: %v", err)
+	}
+	_ = hA.SetActiveAccount("personal")
+
+	bundleFile := filepath.Join(t.TempDir(), "agys-accounts.json")
+	stdout, stderr, code, err := hA.RunAgys("export", bundleFile)
+	if err != nil || code != 0 {
+		t.Fatalf("export failed: %v (code %d)\nStdout: %s\nStderr: %s", err, code, stdout, stderr)
+	}
+
+	// Machine B: brand new machine with no accounts -> imports both & activates 'personal'
+	hB := NewHarness(t)
+	stdout, stderr, code, err = hB.RunAgys("import", bundleFile)
+	if err != nil || code != 0 {
+		t.Fatalf("import on B failed: %v (code %d)\nStdout: %s\nStderr: %s", err, code, stdout, stderr)
+	}
+	activeB, _ := hB.GetActiveProfileName()
+	if activeB != "personal" {
+		t.Errorf("Machine B expected active 'personal', got %q", activeB)
+	}
+	tokB, _ := hB.GetActiveTokenContent()
+	if !strings.Contains(tokB, "ya29.fake-personal-sec_personal") {
+		t.Errorf("Machine B active token was not populated: %s", tokB)
+	}
+
+	// Machine C: already has 'work' (older token) + 'local_only' (active)
+	hC := NewHarness(t)
+	_ = hC.CreateFakeGoogleAccount("work", "work@company.com", "Work Old", "sec_work_old")
+	_ = hC.CreateFakeGoogleAccount("local_only", "local@gmail.com", "Local", "sec_local")
+	_ = hC.SetActiveAccount("local_only")
+
+	// 1) Safe merge answering "n": 'personal' added, 'work' skipped (keeps old token), 'local_only' stays active
+	stdout, stderr, code, err = hC.RunAgysWithInput("n\n", 10*time.Second, "import", bundleFile)
+	if err != nil || code != 0 {
+		t.Fatalf("safe merge import on C failed: %v (code %d)\nStdout: %s\nStderr: %s", err, code, stdout, stderr)
+	}
+	workOnC, _ := os.ReadFile(filepath.Join(hC.ProfilesDir, "work.json"))
+	if !strings.Contains(string(workOnC), "sec_work_old") {
+		t.Errorf("Expected 'work' on C to keep old token when skipped, got: %s", string(workOnC))
+	}
+	if _, err := os.Stat(filepath.Join(hC.ProfilesDir, "personal.json")); err != nil {
+		t.Errorf("Expected 'personal' to be added on C: %v", err)
+	}
+	if activeC, _ := hC.GetActiveProfileName(); activeC != "local_only" {
+		t.Errorf("Expected active on C to remain 'local_only', got %q", activeC)
+	}
+
+	// 2) Import with --overwrite: 'work' updated to new token from bundle
+	stdout, stderr, code, err = hC.RunAgys("import", "--overwrite", bundleFile)
+	if err != nil || code != 0 {
+		t.Fatalf("overwrite import on C failed: %v (code %d)\nStdout: %s\nStderr: %s", err, code, stdout, stderr)
+	}
+	workOnCAfter, _ := os.ReadFile(filepath.Join(hC.ProfilesDir, "work.json"))
+	if !strings.Contains(string(workOnCAfter), "sec_work_new") {
+		t.Errorf("Expected 'work' on C to be overwritten with new token, got: %s", string(workOnCAfter))
 	}
 }

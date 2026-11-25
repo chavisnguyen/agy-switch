@@ -71,7 +71,7 @@ because nothing is usable until the weekly limit resets.
 ```bash
 agys main        # switch to a profile
 agys next        # switch to the best account right now
-agys             # pick from a numbered menu
+agys             # pick from an interactive menu (↑/↓ or 1-9)
 ```
 
 **4. Run `agy` with auto-failover.**
@@ -88,9 +88,9 @@ That's all most people need.
 
 `agys run` starts `agy` and watches its log. On a 429 it:
 
-1. puts the account that session was using into a 30-minute cooldown,
+1. puts the account that session was using into cooldown (30 minutes, or until its earliest quota window resets when completely exhausted),
 2. switches to the next healthy account (same choice as `agys next`),
-3. resumes your conversation with `--continue`, so you keep your context.
+3. resumes the exact conversation (`--conversation=<id> -i continue`) so your interrupted task continues right where it left off.
 
 ```bash
 agys run                                   # new task
@@ -104,7 +104,7 @@ When the session ends, `agys run` prints the exact command to pick it up again.
 
 You can run `agys run` in many terminals at once; each window is handled on its own.
 
-- Each window gets its own log (`~/.gemini/antigravity-cli/log/agys-run-*.log`), so one window's 429 never restarts another. If your `agy` ignores `--log-file`, `agys` warns and falls back to the shared `cli.log`.
+- Each window gets its own log (`~/.gemini/antigravity-cli/log/agys-run-*.log`, cleaned up automatically after 7 days), so one window's 429 never restarts another. If your `agy` ignores `--log-file`, `agys` warns and falls back to the shared `cli.log`.
 - The cooldown goes to the account that window started with, even if another window has switched since.
 - Switches are serialized with a lock. If another window already moved to a healthy account, yours resumes on it instead of switching again.
 
@@ -150,6 +150,18 @@ Keys: `↑` `↓` (or `j` `k`) move · `1`-`9` jump · `enter` resume with auto-
 | `agys conv -a` | list recent conversations from every folder |
 | `agys conv -l` | just list, no prompt |
 
+## Move accounts to another machine
+
+Pack all saved profiles (plus which account is active) into a single `0600` JSON bundle, copy it over, and import:
+
+```bash
+agys export                                 # writes ./agys-accounts.json (or pass a custom path)
+agys import agys-accounts.json              # safe merge: adds new accounts, prompts [y/N/a=all] on conflicts
+agys import --overwrite agys-accounts.json  # replace any conflicting profiles without prompting (alias: -f)
+```
+
+If the new machine has no active session yet, `import` automatically activates the exported active profile and syncs the macOS Keychain so `agy` and the IDE work right away. Delete the bundle file once imported, since it holds raw login tokens.
+
 ## Something not right?
 
 | Run | It tells you |
@@ -166,6 +178,7 @@ Keys: `↑` `↓` (or `j` `k`) move · `1`-`9` jump · `enter` resume with auto-
 - **Quota checks** try IPv4 first, so a broken IPv6 route doesn't make `agys status` hang.
 - **Tab title:** while `agys run` is active, your terminal tab shows the conversation's topic (Ghostty, CMUX, iTerm2, Kitty, macOS Terminal).
 - **5h reset times** can look identical across accounts. That is what Google returns; use `agys quota-raw` to see it.
+- **Verified updates:** `agys update` and `install.sh` verify downloaded release binaries against `checksums.txt` (SHA-256) before installing.
 - Google OAuth client credentials are obfuscated in the binary and resolved at run time; nothing secret is stored in this repository.
 
 ## All commands
@@ -175,13 +188,15 @@ Keys: `↑` `↓` (or `j` `k`) move · `1`-`9` jump · `enter` resume with auto-
 | `agys status` (or `ls`) | all accounts with quota, 5h and weekly |
 | `agys <profile>` | switch to a profile |
 | `agys next` / `agys burn` | switch to the best account |
-| `agys` | numbered menu to switch accounts |
+| `agys` | interactive menu (`↑`/`↓`, `1`-`9`) to switch accounts |
 | `agys run [args...]` | run `agy` with auto-failover and resume |
 | `agys conv [dir]` | pick and resume a conversation |
 | `agys login [name]` | log in with a Google account in the browser and save it |
 | `agys save [name]` | save the current session as a profile |
 | `agys rename <old> <new>` | rename a profile |
 | `agys remove <name>` | delete a profile |
+| `agys export [file]` | export all profiles to a JSON bundle (`agys-accounts.json` by default) |
+| `agys import <file> [--overwrite]` | import profiles from a bundle (safe merge by default) |
 | `agys cooldown [clear]` | show cooldowns / reset them |
 | `agys quota-raw [profile]` | print Google's raw quota response |
 | `agys install` | add shortcut symlinks (`/opt/homebrew/bin` or `~/.local/bin`) |
@@ -195,7 +210,7 @@ brew update && brew upgrade agys      # installed with Homebrew
 agys update                           # installed with install.sh or make install
 ```
 
-`agys status` also tells you when a newer release is available.
+`agys status` also tells you when a newer release is available (set `AGYS_NO_UPDATE_CHECK=1` to disable).
 
 ## Uninstall
 

@@ -42,12 +42,19 @@ TARGET_FILE="$TEMP_DIR/$BINARY_NAME"
 # Check if Go is installed and we are inside source tree
 if command -v go >/dev/null 2>&1 && [ -f "go.mod" ] && grep -q "^module agys$" "go.mod" 2>/dev/null; then
     echo -e "${CYAN}==> Go detected in source repo. Compiling from source...${RESET}"
-    go build -ldflags="-s -w" -o "$TARGET_FILE" .
+    GIT_TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+    LDFLAGS="-s -w"
+    if [ -n "$GIT_TAG" ]; then
+        LDFLAGS="$LDFLAGS -X main.Version=$GIT_TAG"
+    fi
+    go build -ldflags="$LDFLAGS" -o "$TARGET_FILE" .
     echo -e "${GREEN}✓ Local build succeeded.${RESET}"
 else
     # Download pre-built binary from GitHub Releases
     ASSET_NAME="${BINARY_NAME}-${OS}-${ARCH}"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
+    CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/checksums.txt"
+    CHECKSUMS_FILE="$TEMP_DIR/checksums.txt"
 
     echo -e "${CYAN}==> Downloading pre-compiled binary (${ASSET_NAME})...${RESET}"
     if command -v curl >/dev/null 2>&1; then
@@ -56,15 +63,50 @@ else
             echo -e "${YELLOW}Tip: Ensure a GitHub Release exists with pre-built binaries.${RESET}" >&2
             exit 1
         }
+        HTTP_CODE="$(curl -sSL -w "%{http_code}" "$CHECKSUMS_URL" -o "$CHECKSUMS_FILE" || echo "000")"
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "$TARGET_FILE" "$DOWNLOAD_URL" || {
             echo -e "${RED}Error: Failed to download ${DOWNLOAD_URL}${RESET}" >&2
             exit 1
         }
+        if wget -qO "$CHECKSUMS_FILE" "$CHECKSUMS_URL" 2>/dev/null; then
+            HTTP_CODE="200"
+        else
+            HTTP_CODE="404"
+        fi
     else
         echo -e "${RED}Error: Neither curl nor wget is available.${RESET}" >&2
         exit 1
     fi
+
+    if [ "$HTTP_CODE" = "200" ] && [ -s "$CHECKSUMS_FILE" ]; then
+        EXPECTED_SHA="$(awk -v asset="$ASSET_NAME" '{gsub(/^\*|\.\//, "", $2); if ($2 == asset) print tolower($1)}' "$CHECKSUMS_FILE")"
+        if [ -z "$EXPECTED_SHA" ]; then
+            echo -e "${RED}Error: ${ASSET_NAME} not found in checksums.txt${RESET}" >&2
+            exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+            ACTUAL_SHA="$(sha256sum "$TARGET_FILE" | awk '{print tolower($1)}')"
+        elif command -v shasum >/dev/null 2>&1; then
+            ACTUAL_SHA="$(shasum -a 256 "$TARGET_FILE" | awk '{print tolower($1)}')"
+        else
+            echo -e "${RED}Error: Neither sha256sum nor shasum is available to verify binary.${RESET}" >&2
+            exit 1
+        fi
+        if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo -e "${RED}Error: SHA-256 checksum mismatch for ${ASSET_NAME}!${RESET}" >&2
+            echo -e "  Expected: ${EXPECTED_SHA}" >&2
+            echo -e "  Actual  : ${ACTUAL_SHA}" >&2
+            exit 1
+        fi
+        echo -e "${GREEN}✓ Verified SHA-256 checksum.${RESET}"
+    elif [ "$HTTP_CODE" = "404" ]; then
+        echo -e "${YELLOW}⚠️  No checksums.txt in release; skipping SHA-256 verification.${RESET}"
+    else
+        echo -e "${RED}Error: Could not verify checksums.txt (HTTP ${HTTP_CODE}).${RESET}" >&2
+        exit 1
+    fi
+
     chmod +x "$TARGET_FILE"
     echo -e "${GREEN}✓ Download complete.${RESET}"
 fi

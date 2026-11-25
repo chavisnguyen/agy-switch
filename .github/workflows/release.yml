@@ -24,12 +24,16 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
+          VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
           # macOS
-          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/agys-darwin-arm64 .
-          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/agys-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/agys-darwin-arm64 .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/agys-darwin-amd64 .
           # Linux
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/agys-linux-amd64 .
-          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/agys-linux-arm64 .
+          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/agys-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/agys-linux-arm64 .
+          # SHA-256 checksums
+          (cd dist && sha256sum agys-* > checksums.txt)
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -39,4 +43,5 @@ jobs:
             dist/agys-darwin-amd64
             dist/agys-linux-amd64
             dist/agys-linux-arm64
+            dist/checksums.txt
           generate_release_notes: true

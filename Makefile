@@ -1,9 +1,12 @@
 .PHONY: all build install uninstall clean
 
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null)
+LDFLAGS := -s -w $(if $(VERSION),-X main.Version=$(VERSION))
+
 all: build
 
 build:
-	go build -ldflags="-s -w" -o agys .
+	go build -ldflags="$(LDFLAGS)" -o agys .
 
 install:
 	./install.sh
