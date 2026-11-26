@@ -13,23 +13,23 @@ class Agys < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.20/agys-darwin-arm64.tar.gz"
-      sha256 "7a9d5c056116699002afedb952654815697e52dc630c42c4610811592e6b4f16"
+      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.21/agys-darwin-arm64.tar.gz"
+      sha256 "d43aa97309aeb8569721cc28b568463c5f25cbf4fc2614746a211dc7b01f13a7"
     end
     on_intel do
-      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.20/agys-darwin-amd64.tar.gz"
-      sha256 "de43e1338d10df2c5e6a9c1964e96c4555b19bb5bceee6f27f620fc520595a1c"
+      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.21/agys-darwin-amd64.tar.gz"
+      sha256 "bee498afb0861624c06639fafda917e42509f6bebe33de562d306926778bbfe9"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.20/agys-linux-arm64.tar.gz"
-      sha256 "92648138e7753a8b4ebafeda0698e9e8e24838e98e51a638d2650a4de62e1917"
+      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.21/agys-linux-arm64.tar.gz"
+      sha256 "58110a8ab35a7e94321d0e095ea07691b0b543c9848d2ff64360b866acc7a349"
     end
     on_intel do
-      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.20/agys-linux-amd64.tar.gz"
-      sha256 "e2747b67c07ff90498d82795a39d28d5ef6a215474d06a2ce24b767a76a4708f"
+      url "https://github.com/chavisnguyen/agys/releases/download/v1.0.21/agys-linux-amd64.tar.gz"
+      sha256 "cbecf42e418ea791b0fb96991bb5e615589a85c2674bea33ae556a6f7e2c1bc6"
     end
   end
 
