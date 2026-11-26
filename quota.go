@@ -80,7 +80,6 @@ type ProfileQuota struct {
 	Gemini5h         QuotaWindow
 	GeminiWeekly     QuotaWindow
 	GeminiHasSummary bool
-	Groups           []QuotaGroup
 }
 
 // QuotaWindow holds a single quota bucket (either the 5h or the weekly window).
@@ -94,8 +93,6 @@ type QuotaWindow struct {
 
 type QuotaBucket struct {
 	BucketID          string  `json:"bucketId"`
-	DisplayName       string  `json:"displayName"`
-	Description       string  `json:"description"`
 	Window            string  `json:"window"`
 	RemainingFraction float64 `json:"remainingFraction"`
 	ResetTime         string  `json:"resetTime"`
@@ -104,7 +101,6 @@ type QuotaBucket struct {
 
 type QuotaGroup struct {
 	DisplayName string        `json:"displayName"`
-	Description string        `json:"description"`
 	Buckets     []QuotaBucket `json:"buckets"`
 }
 
@@ -373,22 +369,13 @@ func deriveEffectiveWindow(has5h bool, fiveH QuotaWindow, hasWeekly bool, weekly
 // applyQuotaSummary maps the bucketId values from retrieveUserQuotaSummary
 // onto the Claude/Gemini 5h+weekly and effective single-window fields of ProfileQuota.
 func applyQuotaSummary(quota *ProfileQuota, summary *QuotaSummaryResponse) {
-	quota.Groups = make([]QuotaGroup, 0, len(summary.Groups))
 	var hasClaude5h, hasClaudeWeekly, hasGemini5h, hasGeminiWeekly bool
 	for _, g := range summary.Groups {
-		cleanedGroup := QuotaGroup{
-			DisplayName: g.DisplayName,
-			Description: g.Description,
-			Buckets:     make([]QuotaBucket, 0, len(g.Buckets)),
-		}
 		groupLower := strings.ToLower(g.DisplayName)
 		for _, b := range g.Buckets {
-			b.ResetTime = cleanResetTime(b.ResetTime)
-			cleanedGroup.Buckets = append(cleanedGroup.Buckets, b)
-
 			w := QuotaWindow{
 				Remaining: b.RemainingFraction,
-				ResetTime: b.ResetTime,
+				ResetTime: cleanResetTime(b.ResetTime),
 				Disabled:  b.Disabled,
 			}
 			switch b.BucketID {
@@ -423,9 +410,6 @@ func applyQuotaSummary(quota *ProfileQuota, summary *QuotaSummaryResponse) {
 					}
 				}
 			}
-		}
-		if len(cleanedGroup.Buckets) > 0 {
-			quota.Groups = append(quota.Groups, cleanedGroup)
 		}
 	}
 
@@ -464,125 +448,16 @@ func fetchAllProfilesQuota(profiles []ProfileInfo, timeout time.Duration) map[st
 
 func formatQuotaBadge(fraction float64, err error) string {
 	if err != nil {
-		return colorize("N/A", ColorAgyMuted)
+		return colorize("N/A", ColorDim)
 	}
 	pct := fraction * 100
-	str := fmt.Sprintf("%6.2f%%", pct)
-	return colorize(str, agyQuotaColor(fraction, false))
-}
-
-func agyQuotaColor(remaining float64, disabled bool) string {
-	pct := remaining * 100
-	if disabled || pct < 10 {
-		return ColorAgyCoral
+	str := fmt.Sprintf("%5.1f%%", pct)
+	if pct >= 50 {
+		return colorize("🟢 "+str, ColorGreen)
+	} else if pct >= 10 {
+		return colorize("🟡 "+str, ColorYellow)
 	}
-	if pct < 25 {
-		return ColorAgyAmber
-	}
-	return ColorAgyLime
-}
-
-// formatAgyUsageBar renders an AGY `/usage`-style solid progress bar:
-// `    [█████████████████████████████████░░░░░░░] 81.15%`
-// using #bcdf59/#ffd166/#ff6188 for remaining and solid #414042 blocks for the empty track.
-func formatAgyUsageBar(remaining float64, disabled bool) string {
-	const barWidth = 50
-	if disabled {
-		remaining = 0
-	}
-	pct := remaining * 100
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-
-	filled := int(pct/100*float64(barWidth) + 0.5)
-	if pct > 0 && filled == 0 {
-		filled = 1
-	}
-	if pct < 99.995 && filled == barWidth {
-		filled = barWidth - 1
-	}
-	if filled > barWidth {
-		filled = barWidth
-	}
-	empty := barWidth - filled
-
-	barColor := agyQuotaColor(remaining, disabled)
-	filledStr := colorize(strings.Repeat("█", filled), barColor)
-	emptyStr := strings.Repeat("░", empty)
-	if useColor() {
-		emptyStr = colorize(strings.Repeat("█", empty), ColorAgyTrack)
-	}
-
-	openBr := colorize("[", ColorAgyText)
-	closeBr := colorize("]", ColorAgyText)
-	pctStr := colorize(fmt.Sprintf("%.2f%%", pct), ColorAgyMuted)
-	return fmt.Sprintf("    %s%s%s%s %s", openBr, filledStr, emptyStr, closeBr, pctStr)
-}
-
-// formatAgyRefreshStatus returns the subtitle below an AGY `/usage` progress bar
-// (e.g. "Refreshes in 6d 14h 53m", "Refreshes in 53m", or "Quota available") and its color.
-func formatAgyRefreshStatus(remaining float64, resetStr string, disabled bool, now time.Time) (string, string) {
-	if disabled {
-		return "Weekly limit reached", ColorAgyCoral
-	}
-	color := agyQuotaColor(remaining, false)
-	if remaining >= 0.99995 {
-		return "Quota available", color
-	}
-	if resetStr != "" {
-		if t, err := time.Parse(time.RFC3339, resetStr); err == nil && t.Year() > 1970 {
-			diff := t.Sub(now)
-			if diff <= 0 {
-				return "Refreshing soon", color
-			}
-			totalMins := int((diff + 30*time.Second) / time.Minute)
-			if totalMins < 1 {
-				return "Refreshes in < 1m", color
-			}
-			days := totalMins / (24 * 60)
-			hours := (totalMins % (24 * 60)) / 60
-			mins := totalMins % 60
-			var parts []string
-			if days > 0 {
-				parts = append(parts, fmt.Sprintf("%dd", days))
-			}
-			if hours > 0 {
-				parts = append(parts, fmt.Sprintf("%dh", hours))
-			}
-			if mins > 0 || len(parts) == 0 {
-				parts = append(parts, fmt.Sprintf("%dm", mins))
-			}
-			return "Refreshes in " + strings.Join(parts, " "), color
-		}
-	}
-	if remaining <= 0 {
-		return "Limit reached", ColorAgyCoral
-	}
-	return "Quota available", color
-}
-
-func quotaGroupsForDisplay(q ProfileQuota) []QuotaGroup {
-	if len(q.Groups) > 0 {
-		return q.Groups
-	}
-	return []QuotaGroup{
-		{
-			DisplayName: "Gemini Models",
-			Buckets: []QuotaBucket{
-				{DisplayName: "Limit Remaining", RemainingFraction: q.GeminiRemaining, ResetTime: q.GeminiResetTime},
-			},
-		},
-		{
-			DisplayName: "Claude and GPT models",
-			Buckets: []QuotaBucket{
-				{DisplayName: "Limit Remaining", RemainingFraction: q.ClaudeRemaining, ResetTime: q.ClaudeResetTime},
-			},
-		},
-	}
+	return colorize("🔴 "+str, ColorRed)
 }
 
 // formatQuotaErrorShort summarizes a quota fetch error into a short tag for UI display.
@@ -656,6 +531,83 @@ func formatQuotaReset(resetStr string) string {
 		leftStr = fmt.Sprintf("%dh left", int(diff.Hours()))
 	}
 	return fmt.Sprintf(" (resets %s, %s [Weekly Cap ⚠️])", local.Format("02 Jan 15:04"), leftStr)
+}
+
+// formatQuotaBar renders a fixed-width progress bar for a remaining fraction
+// (0..1), colored by severity (green/yellow/red), for compact side-by-side
+// 5h vs weekly comparison in `agys status`.
+func formatQuotaBar(remaining float64) string {
+	const barWidth = 20
+	pct := remaining * 100
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := int(pct/100*float64(barWidth) + 0.5)
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+	color := ColorGreen
+	if pct < 10 {
+		color = ColorRed
+	} else if pct < 50 {
+		color = ColorYellow
+	}
+	return colorize(bar, color)
+}
+
+// quotaStatusEmoji returns the same severity emoji used by formatQuotaBadge,
+// standalone so bar-style lines can place it next to the bar instead of the percentage.
+func quotaStatusEmoji(remaining float64) string {
+	pct := remaining * 100
+	if pct >= 50 {
+		return "🟢"
+	} else if pct >= 10 {
+		return "🟡"
+	}
+	return "🔴"
+}
+
+// formatBucketResetCompact formats a reset timestamp for a bucket whose window
+// (5h vs weekly) is already known, for use next to a quota bar where the window
+// label is already shown separately.
+func formatBucketResetCompact(resetStr string, isWeekly bool) string {
+	if resetStr == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, resetStr)
+	if err != nil {
+		return resetStr
+	}
+
+	diff := time.Until(t)
+	local := t.Local()
+
+	if !isWeekly {
+		if diff <= 0 {
+			return fmt.Sprintf("reset pending (%s)", local.Format("15:04"))
+		}
+		h := int(diff.Hours())
+		m := int(diff.Minutes()) % 60
+		if h > 0 {
+			return fmt.Sprintf("in %dh%02dm (%s)", h, m, local.Format("15:04"))
+		}
+		return fmt.Sprintf("in %dm (%s)", m, local.Format("15:04"))
+	}
+
+	if diff <= 0 {
+		return fmt.Sprintf("reset pending (%s)", local.Format("02 Jan"))
+	}
+	if diff >= 24*time.Hour {
+		d := int(diff.Hours()) / 24
+		h := int(diff.Hours()) % 24
+		return fmt.Sprintf("%dd%02dh left (%s)", d, h, local.Format("02 Jan"))
+	}
+	return fmt.Sprintf("%dh left (%s)", int(diff.Hours()), local.Format("02 Jan"))
 }
 
 type SmartCandidate struct {
