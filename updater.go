@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-var Version = "v1.0.20"
+var Version = "v1.0.21"
 
 const (
 	repoOwner = "chavisnguyen"

@@ -27,6 +27,16 @@ const (
 	ColorCyan   = "\033[96m"
 	ColorYellow = "\033[93m"
 	ColorRed    = "\033[91m"
+
+	// Native AGY `/usage` TrueColor palette
+	ColorAgyLime    = "\033[38;2;188;223;89m"    // #bcdf59
+	ColorAgyAmber   = "\033[38;2;255;209;102m"   // #ffd166
+	ColorAgyCoral   = "\033[38;2;255;97;136m"    // #ff6188
+	ColorAgyTrack   = "\033[38;2;65;64;66m"      // #414042
+	ColorAgyHeading = "\033[1;38;2;252;252;250m" // #fcfcfa bold
+	ColorAgyText    = "\033[38;2;252;252;250m"   // #fcfcfa
+	ColorAgyMuted   = "\033[38;2;145;144;145m"   // #919091
+	ColorAgyCyan    = "\033[38;2;100;210;232m"   // #64d2e8
 )
 
 func useColor() bool {
@@ -212,94 +222,75 @@ func cmdNext() {
 	fmt.Println()
 }
 
-// printQuotaLine prints a model's quota as a progress bar. When the 5h/weekly
-// split from retrieveUserQuotaSummary is available it prints both windows on
-// two aligned bar lines; otherwise it falls back to a single combined-window
-// bar line using fetchAvailableModels' data.
-func printQuotaLine(modelLabel, prefix string, hasSummary bool, fiveH, weekly QuotaWindow, fallbackRemaining float64, fallbackResetTime string, err error) {
-	if err != nil {
-		label := "N/A"
-		if reason := formatQuotaErrorShort(err); reason != "" {
-			label += " (" + reason + ")"
+func printProfileUsageBlock(p ProfileInfo, q ProfileQuota, now time.Time) {
+	profileTag := colorize(fmt.Sprintf("(%s)", p.ProfileName), ColorAgyMuted)
+	if p.IsActive {
+		profileTag = colorize(fmt.Sprintf("● %s · ACTIVE", p.ProfileName), ColorBold+ColorAgyLime)
+	} else if p.IsCoolingDown {
+		profileTag = colorize(fmt.Sprintf("○ %s · %s cooldown", p.ProfileName, p.CooldownRemain), ColorAgyAmber)
+	}
+
+	fmt.Printf("  %s %s  %s\n",
+		colorize("Account:", ColorAgyText),
+		colorize(p.Email, ColorAgyCyan),
+		profileTag,
+	)
+
+	if q.Err != nil {
+		reason := formatQuotaErrorShort(q.Err)
+		msg := "Quota unavailable"
+		if reason != "" {
+			msg += " (" + reason + ")"
 		}
-		fmt.Printf("%s%-6s : %s\n", prefix, modelLabel, colorize(label, ColorDim))
+		fmt.Println()
+		fmt.Printf("  %s\n", colorize(msg, ColorAgyMuted))
 		return
 	}
 
-	if hasSummary {
-		fiveHInfo := formatBucketResetCompact(fiveH.ResetTime, false)
-		fiveHRemaining := fiveH.Remaining
-		// The server sets disabled=true on the 5h bucket once the weekly limit is
-		// hit ("the 5-hour limit does not currently apply"). Nothing is usable
-		// then, so show 0% instead of the misleading 100%.
-		if fiveH.Disabled {
-			fiveHInfo = "blocked by weekly cap"
-			fiveHRemaining = 0
+	for _, g := range quotaGroupsForDisplay(q) {
+		fmt.Println()
+		fmt.Println(colorize(strings.ToUpper(g.DisplayName), ColorAgyHeading))
+		if g.Description != "" {
+			fmt.Printf("  %s\n", colorize(g.Description, ColorAgyMuted))
 		}
-		printQuotaBarLine(prefix, modelLabel+" 5h", fiveHRemaining, fiveHInfo)
-		printQuotaBarLine(prefix, modelLabel+" 1w", weekly.Remaining, formatBucketResetCompact(weekly.ResetTime, true))
-		return
+		for _, b := range g.Buckets {
+			label := b.DisplayName
+			if label == "" {
+				label = b.BucketID
+			}
+			fmt.Println()
+			fmt.Printf("  %s\n", colorize(label, ColorAgyHeading))
+			fmt.Println(formatAgyUsageBar(b.RemainingFraction, b.Disabled))
+			statusText, statusColor := formatAgyRefreshStatus(b.RemainingFraction, b.ResetTime, b.Disabled, now)
+			fmt.Printf("    %s\n", colorize(statusText, statusColor))
+		}
 	}
-
-	resetInfo := ""
-	if fallbackResetTime != "" {
-		resetInfo = strings.TrimSpace(formatQuotaReset(fallbackResetTime))
-	}
-	printQuotaBarLine(prefix, modelLabel, fallbackRemaining, resetInfo)
-}
-
-func printQuotaBarLine(prefix, label string, remaining float64, resetInfo string) {
-	pct := remaining * 100
-	line := fmt.Sprintf("%s%-9s %s [%s] %5.1f%%", prefix, label, quotaStatusEmoji(remaining), formatQuotaBar(remaining), pct)
-	if resetInfo != "" {
-		line += "  " + colorize(resetInfo, ColorDim)
-	}
-	fmt.Println(line)
 }
 
 func cmdCurrent() {
 	profiles, _ := getAllProfiles()
 	if len(profiles) == 0 {
 		fmt.Println()
-		fmt.Println(colorize("❌ No saved profiles found.", ColorYellow))
-		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agys save <name>", ColorGreen))
+		fmt.Println(colorize("No saved profiles found.", ColorAgyAmber))
+		fmt.Printf("Tip: Run %s to save your active account.\n\n", colorize("agys save <name>", ColorAgyLime))
 		return
 	}
 
 	finishUpdateCheck := StartUpdateCheck()
 	quotas := fetchAllProfilesQuota(profiles, 8*time.Second)
+	now := time.Now()
 
 	fmt.Println()
-	fmt.Println(colorize("📊 AGY ACCOUNTS STATUS & QUOTA", ColorBold+ColorCyan))
-	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
-
 	for idx, p := range profiles {
 		q := quotas[p.ProfileName]
-
-		badge := colorize("○ Ready", ColorDim)
-		if p.IsActive {
-			badge = colorize("● ACTIVE", ColorBold+ColorGreen)
-		} else if p.IsCoolingDown {
-			badge = colorize("🟡 "+p.CooldownRemain+" cooldown", ColorYellow)
-		}
-
-		pTitle := fmt.Sprintf("[%d] %s", idx+1, p.ProfileName)
-		if p.IsActive {
-			pTitle = colorize(pTitle, ColorBold)
-		}
-
-		fmt.Printf("%s (%s)\n", pTitle, badge)
-		fmt.Printf("    Email  : %s\n", colorize(p.Email, ColorCyan))
-
-		printQuotaLine("Claude", "    ", q.ClaudeHasSummary, q.Claude5h, q.ClaudeWeekly, q.ClaudeRemaining, q.ClaudeResetTime, q.Err)
-		printQuotaLine("Gemini", "    ", q.GeminiHasSummary, q.Gemini5h, q.GeminiWeekly, q.GeminiRemaining, q.GeminiResetTime, q.Err)
+		printProfileUsageBlock(p, q, now)
 
 		if idx < len(profiles)-1 {
-			fmt.Println(colorize("    "+strings.Repeat("─", 50), ColorDim))
+			fmt.Println()
+			fmt.Println(colorize(strings.Repeat("─", 70), ColorAgyTrack))
+			fmt.Println()
 		}
 	}
-
-	fmt.Println(colorize(strings.Repeat("═", 58), ColorDim))
 	fmt.Println()
 	finishUpdateCheck(800 * time.Millisecond)
 }

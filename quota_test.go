@@ -186,3 +186,29 @@ func TestFormatQuotaErrorShort(t *testing.T) {
 		t.Errorf("got %q, want token expired", got)
 	}
 }
+
+func TestFormatAgyRefreshStatus(t *testing.T) {
+	now := time.Date(2026, 11, 26, 16, 8, 0, 0, time.UTC)
+
+	text, color := formatAgyRefreshStatus(1.0, "2026-11-26T21:07:00Z", false, now)
+	if text != "Quota available" || color != ColorAgyLime {
+		t.Errorf("got (%q, %q), want ('Quota available', ColorAgyLime)", text, color)
+	}
+
+	resetWeekly := now.Add(6*24*time.Hour + 14*time.Hour + 53*time.Minute).UTC().Format(time.RFC3339)
+	text, _ = formatAgyRefreshStatus(0.8115, resetWeekly, false, now)
+	if text != "Refreshes in 6d 14h 53m" {
+		t.Errorf("got %q, want 'Refreshes in 6d 14h 53m'", text)
+	}
+
+	reset5h := now.Add(53 * time.Minute).UTC().Format(time.RFC3339)
+	text, _ = formatAgyRefreshStatus(0.6735, reset5h, false, now)
+	if text != "Refreshes in 53m" {
+		t.Errorf("got %q, want 'Refreshes in 53m'", text)
+	}
+
+	text, color = formatAgyRefreshStatus(1.0, "", true, now)
+	if text != "Weekly limit reached" || color != ColorAgyCoral {
+		t.Errorf("got (%q, %q), want ('Weekly limit reached', ColorAgyCoral)", text, color)
+	}
+}
