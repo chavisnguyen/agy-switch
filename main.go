@@ -112,7 +112,7 @@ func cmdSave(name string) {
 
 	// Verify account status with Google before saving
 	fmt.Print(colorize("🔍 Verifying account status with Google...", ColorDim))
-	ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
+	ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancelCheck()
 	q := fetchProfileQuota(ctxCheck, paths.TokenPath)
 	if q.Err != nil && strings.Contains(q.Err.Error(), "Verify your account") {
@@ -218,7 +218,11 @@ func cmdNext() {
 // bar line using fetchAvailableModels' data.
 func printQuotaLine(modelLabel, prefix string, hasSummary bool, fiveH, weekly QuotaWindow, fallbackRemaining float64, fallbackResetTime string, err error) {
 	if err != nil {
-		fmt.Printf("%s%-6s : %s\n", prefix, modelLabel, colorize("N/A", ColorDim))
+		label := "N/A"
+		if reason := formatQuotaErrorShort(err); reason != "" {
+			label += " (" + reason + ")"
+		}
+		fmt.Printf("%s%-6s : %s\n", prefix, modelLabel, colorize(label, ColorDim))
 		return
 	}
 
@@ -263,7 +267,7 @@ func cmdCurrent() {
 	}
 
 	finishUpdateCheck := StartUpdateCheck()
-	quotas := fetchAllProfilesQuota(profiles, 5*time.Second)
+	quotas := fetchAllProfilesQuota(profiles, 8*time.Second)
 
 	fmt.Println()
 	fmt.Println(colorize("📊 AGY ACCOUNTS STATUS & QUOTA", ColorBold+ColorCyan))
@@ -313,7 +317,7 @@ func selectProfileInteractive(profiles []ProfileInfo) int {
 		}
 	}
 
-	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
+	quotas := fetchAllProfilesQuota(profiles, 8*time.Second)
 
 	totalLines := len(profiles) + 6
 
@@ -545,7 +549,7 @@ func cmdLoginNew(name string) {
 
 		// Verify account status with Google before finalizing profile
 		fmt.Print(colorize("🔍 Verifying account status with Google...", ColorDim))
-		ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
+		ctxCheck, cancelCheck := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancelCheck()
 		q := fetchProfileQuota(ctxCheck, targetPath)
 		if q.Err != nil && strings.Contains(q.Err.Error(), "Verify your account") {

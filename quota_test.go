@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -121,5 +123,66 @@ func TestFormatShortDuration(t *testing.T) {
 		if got := formatShortDuration(d); got != want {
 			t.Errorf("formatShortDuration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestApplyQuotaSummaryDerivesEffectiveWindows(t *testing.T) {
+	summary := &QuotaSummaryResponse{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Buckets: []QuotaBucket{
+					{BucketID: "gemini-weekly", Window: "weekly", RemainingFraction: 0.84, ResetTime: "2026-12-03T07:01:51Z"},
+					{BucketID: "gemini-5h", Window: "5h", RemainingFraction: 0.78, ResetTime: "2026-11-26T17:01:51Z"},
+				},
+			},
+			{
+				DisplayName: "Claude and GPT models",
+				Buckets: []QuotaBucket{
+					{BucketID: "3p-weekly", Window: "weekly", RemainingFraction: 1.0, ResetTime: "1970-01-01T00:00:00Z"},
+					{BucketID: "3p-5h", Window: "5h", RemainingFraction: 1.0, ResetTime: "1970-01-01T00:00:00Z"},
+				},
+			},
+		},
+	}
+
+	var q ProfileQuota
+	applyQuotaSummary(&q, summary)
+
+	if !q.GeminiHasSummary || q.GeminiRemaining != 0.78 || q.GeminiResetTime != "2026-11-26T17:01:51Z" {
+		t.Errorf("unexpected Gemini effective quota: %+v", q)
+	}
+	if !q.ClaudeHasSummary || q.ClaudeRemaining != 1.0 || q.ClaudeResetTime != "" {
+		t.Errorf("expected unused Claude epoch reset time to be stripped, got: %+v", q)
+	}
+
+	// Weekly cap hit disables 5h bucket -> effective remaining should reflect weekly cap (0)
+	lockedSummary := &QuotaSummaryResponse{
+		Groups: []QuotaGroup{
+			{
+				DisplayName: "Claude and GPT models",
+				Buckets: []QuotaBucket{
+					{BucketID: "3p-weekly", Window: "weekly", RemainingFraction: 0, ResetTime: "2026-12-03T07:01:51Z"},
+					{BucketID: "3p-5h", Window: "5h", RemainingFraction: 1.0, Disabled: true},
+				},
+			},
+		},
+	}
+	var qLocked ProfileQuota
+	applyQuotaSummary(&qLocked, lockedSummary)
+	if qLocked.ClaudeRemaining != 0 || qLocked.ClaudeResetTime != "2026-12-03T07:01:51Z" {
+		t.Errorf("expected weekly-locked ClaudeRemaining=0 with weekly reset time, got %+v", qLocked)
+	}
+}
+
+func TestFormatQuotaErrorShort(t *testing.T) {
+	if got := formatQuotaErrorShort(context.DeadlineExceeded); got != "timeout" {
+		t.Errorf("got %q, want timeout", got)
+	}
+	if got := formatQuotaErrorShort(errors.New("quota summary api error (401): unauthorized")); got != "auth error" {
+		t.Errorf("got %q, want auth error", got)
+	}
+	if got := formatQuotaErrorShort(errors.New("token refresh failed (400): invalid_grant")); got != "token expired" {
+		t.Errorf("got %q, want token expired", got)
 	}
 }

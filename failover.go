@@ -174,7 +174,7 @@ func cooldownDuration(name string) time.Duration {
 		if p.ProfileName != name {
 			continue
 		}
-		q, ok := fetchAllProfilesQuota([]ProfileInfo{p}, 3*time.Second)[p.ProfileName]
+		q, ok := fetchAllProfilesQuota([]ProfileInfo{p}, 6*time.Second)[p.ProfileName]
 		if !ok || q.Err != nil {
 			return defaultCooldown
 		}

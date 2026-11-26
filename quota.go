@@ -26,12 +26,12 @@ const (
 )
 
 var quotaHTTPClient = &http.Client{
-	Timeout: 6 * time.Second,
+	Timeout: 8 * time.Second,
 	Transport: &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{
-				Timeout:   3 * time.Second,
+				Timeout:   4 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}
 			// Prefer IPv4 first to avoid hanging on broken IPv6 routes
@@ -44,7 +44,7 @@ var quotaHTTPClient = &http.Client{
 		MaxIdleConns:          20,
 		MaxIdleConnsPerHost:   10,
 		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   3 * time.Second,
+		TLSHandshakeTimeout:   4 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	},
 }
@@ -181,10 +181,12 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 	}
 
 	accessToken := ""
+	usedCachedToken := false
 	if tokFile.Token.AccessToken != "" && tokFile.Token.Expiry != "" {
 		if exp, err := time.Parse(time.RFC3339, tokFile.Token.Expiry); err == nil {
 			if time.Until(exp) > 2*time.Minute {
 				accessToken = tokFile.Token.AccessToken
+				usedCachedToken = true
 			}
 		}
 	}
@@ -197,6 +199,33 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 		accessToken = freshToken
 	}
 
+	// Primary path: retrieveUserQuotaSummary returns both 5h and weekly buckets in
+	// a single call (same source used by `agy -p /usage`).
+	summary, statusCode, summaryErr := fetchQuotaSummary(ctx, accessToken)
+	if statusCode == http.StatusUnauthorized && usedCachedToken && tokFile.Token.RefreshToken != "" {
+		if freshToken, err := getFreshAccessToken(ctx, tokFile.Token.RefreshToken, ""); err == nil {
+			accessToken = freshToken
+			usedCachedToken = false
+			summary, statusCode, summaryErr = fetchQuotaSummary(ctx, accessToken)
+		}
+	}
+	if summaryErr == nil && summary != nil {
+		var quota ProfileQuota
+		applyQuotaSummary(&quota, summary)
+		if quota.ClaudeHasSummary || quota.GeminiHasSummary {
+			return quota
+		}
+	}
+
+	// Fallback path: fetchAvailableModels for older accounts or if quota summary is unavailable.
+	fallbackQuota := fetchAvailableModelsQuota(ctx, accessToken, tokFile.Token.RefreshToken, usedCachedToken)
+	if fallbackQuota.Err != nil && summaryErr != nil {
+		return ProfileQuota{Err: summaryErr}
+	}
+	return fallbackQuota
+}
+
+func fetchAvailableModelsQuota(ctx context.Context, accessToken, refreshToken string, allowRetry bool) ProfileQuota {
 	req, err := http.NewRequestWithContext(ctx, "POST", modelsEndpoint, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
 		return ProfileQuota{Err: err}
@@ -211,9 +240,8 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized && tokFile.Token.RefreshToken != "" {
-		// Retry once with refreshed access token
-		if freshToken, err := getFreshAccessToken(ctx, tokFile.Token.RefreshToken, ""); err == nil {
+	if resp.StatusCode == http.StatusUnauthorized && allowRetry && refreshToken != "" {
+		if freshToken, err := getFreshAccessToken(ctx, refreshToken, ""); err == nil {
 			req2, err2 := http.NewRequestWithContext(ctx, "POST", modelsEndpoint, bytes.NewBuffer([]byte("{}")))
 			if err2 == nil {
 				req2.Header.Set("Authorization", "Bearer "+freshToken)
@@ -238,41 +266,47 @@ func fetchProfileQuota(ctx context.Context, tokenFile string) ProfileQuota {
 	}
 
 	var quota ProfileQuota
-	// Claude quota: check claude-sonnet-4-6 or claude-opus-4-6-thinking
 	if m, ok := modelsResp.Models["claude-sonnet-4-6"]; ok && m.QuotaInfo != nil {
 		quota.ClaudeRemaining = m.QuotaInfo.RemainingFraction
-		quota.ClaudeResetTime = m.QuotaInfo.ResetTime
+		quota.ClaudeResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
 	} else if m, ok := modelsResp.Models["claude-opus-4-6-thinking"]; ok && m.QuotaInfo != nil {
 		quota.ClaudeRemaining = m.QuotaInfo.RemainingFraction
-		quota.ClaudeResetTime = m.QuotaInfo.ResetTime
+		quota.ClaudeResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
+	} else {
+		for id, m := range modelsResp.Models {
+			if strings.HasPrefix(id, "claude-") && m.QuotaInfo != nil {
+				quota.ClaudeRemaining = m.QuotaInfo.RemainingFraction
+				quota.ClaudeResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
+				break
+			}
+		}
 	}
 
-	// Gemini quota: check gemini-3.8-flash-tiered or gemini-2.5-pro
 	if m, ok := modelsResp.Models["gemini-3.8-flash-tiered"]; ok && m.QuotaInfo != nil {
 		quota.GeminiRemaining = m.QuotaInfo.RemainingFraction
-		quota.GeminiResetTime = m.QuotaInfo.ResetTime
+		quota.GeminiResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
 	} else if m, ok := modelsResp.Models["gemini-2.5-pro"]; ok && m.QuotaInfo != nil {
 		quota.GeminiRemaining = m.QuotaInfo.RemainingFraction
-		quota.GeminiResetTime = m.QuotaInfo.ResetTime
-	}
-
-	// Best-effort: fetch the explicit 5h/weekly bucket split. If it fails (older
-	// account type, network hiccup, etc.) the fields above already carry a usable
-	// single-window fallback, so we don't surface this as a hard error.
-	if summary, err := fetchQuotaSummary(ctx, accessToken); err == nil {
-		applyQuotaSummary(&quota, summary)
+		quota.GeminiResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
+	} else {
+		for id, m := range modelsResp.Models {
+			if strings.HasPrefix(id, "gemini-") && m.QuotaInfo != nil {
+				quota.GeminiRemaining = m.QuotaInfo.RemainingFraction
+				quota.GeminiResetTime = cleanResetTime(m.QuotaInfo.ResetTime)
+				break
+			}
+		}
 	}
 
 	return quota
 }
 
-// fetchQuotaSummary calls retrieveUserQuotaSummary, which (unlike
-// fetchAvailableModels) reports the 5h and weekly buckets separately for both
-// the Gemini group and the Claude/GPT group.
-func fetchQuotaSummary(ctx context.Context, accessToken string) (*QuotaSummaryResponse, error) {
+// fetchQuotaSummary calls retrieveUserQuotaSummary, which reports the 5h and
+// weekly buckets separately for both the Gemini group and the Claude/GPT group.
+func fetchQuotaSummary(ctx context.Context, accessToken string) (*QuotaSummaryResponse, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", quotaSummaryURL, bytes.NewBuffer([]byte("{}")))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -280,43 +314,112 @@ func fetchQuotaSummary(ctx context.Context, accessToken string) (*QuotaSummaryRe
 
 	resp, err := quotaHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("quota summary api error (%d): %s", resp.StatusCode, string(body))
+		return nil, resp.StatusCode, fmt.Errorf("quota summary api error (%d): %s", resp.StatusCode, string(body))
 	}
 
 	var summary QuotaSummaryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
-	return &summary, nil
+	return &summary, resp.StatusCode, nil
+}
+
+// cleanResetTime drops placeholder epoch timestamps (e.g. 1970-01-01T00:00:00Z)
+// returned for untouched quota buckets.
+func cleanResetTime(resetStr string) string {
+	resetStr = strings.TrimSpace(resetStr)
+	if resetStr == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339, resetStr); err == nil && t.Year() <= 1970 {
+		return ""
+	}
+	return resetStr
+}
+
+func deriveEffectiveWindow(has5h bool, fiveH QuotaWindow, hasWeekly bool, weekly QuotaWindow) (float64, string) {
+	switch {
+	case has5h && hasWeekly:
+		if fiveH.Disabled || weekly.Remaining < 0.05 {
+			return weekly.Remaining, weekly.ResetTime
+		}
+		rem := fiveH.Remaining
+		if weekly.Remaining < rem {
+			rem = weekly.Remaining
+		}
+		return rem, fiveH.ResetTime
+	case has5h:
+		if fiveH.Disabled {
+			return 0, fiveH.ResetTime
+		}
+		return fiveH.Remaining, fiveH.ResetTime
+	case hasWeekly:
+		return weekly.Remaining, weekly.ResetTime
+	default:
+		return 0, ""
+	}
 }
 
 // applyQuotaSummary maps the bucketId values from retrieveUserQuotaSummary
-// onto the Claude/Gemini 5h+weekly fields of a ProfileQuota.
+// onto the Claude/Gemini 5h+weekly and effective single-window fields of ProfileQuota.
 func applyQuotaSummary(quota *ProfileQuota, summary *QuotaSummaryResponse) {
+	var hasClaude5h, hasClaudeWeekly, hasGemini5h, hasGeminiWeekly bool
 	for _, g := range summary.Groups {
+		groupLower := strings.ToLower(g.DisplayName)
 		for _, b := range g.Buckets {
-			w := QuotaWindow{Remaining: b.RemainingFraction, ResetTime: b.ResetTime, Disabled: b.Disabled}
+			w := QuotaWindow{
+				Remaining: b.RemainingFraction,
+				ResetTime: cleanResetTime(b.ResetTime),
+				Disabled:  b.Disabled,
+			}
 			switch b.BucketID {
 			case "3p-5h":
 				quota.Claude5h = w
-				quota.ClaudeHasSummary = true
+				hasClaude5h = true
 			case "3p-weekly":
 				quota.ClaudeWeekly = w
-				quota.ClaudeHasSummary = true
+				hasClaudeWeekly = true
 			case "gemini-5h":
 				quota.Gemini5h = w
-				quota.GeminiHasSummary = true
+				hasGemini5h = true
 			case "gemini-weekly":
 				quota.GeminiWeekly = w
-				quota.GeminiHasSummary = true
+				hasGeminiWeekly = true
+			default:
+				if strings.Contains(groupLower, "claude") {
+					if b.Window == "5h" {
+						quota.Claude5h = w
+						hasClaude5h = true
+					} else if b.Window == "weekly" {
+						quota.ClaudeWeekly = w
+						hasClaudeWeekly = true
+					}
+				} else if strings.Contains(groupLower, "gemini") {
+					if b.Window == "5h" {
+						quota.Gemini5h = w
+						hasGemini5h = true
+					} else if b.Window == "weekly" {
+						quota.GeminiWeekly = w
+						hasGeminiWeekly = true
+					}
+				}
 			}
 		}
+	}
+
+	if hasClaude5h || hasClaudeWeekly {
+		quota.ClaudeHasSummary = true
+		quota.ClaudeRemaining, quota.ClaudeResetTime = deriveEffectiveWindow(hasClaude5h, quota.Claude5h, hasClaudeWeekly, quota.ClaudeWeekly)
+	}
+	if hasGemini5h || hasGeminiWeekly {
+		quota.GeminiHasSummary = true
+		quota.GeminiRemaining, quota.GeminiResetTime = deriveEffectiveWindow(hasGemini5h, quota.Gemini5h, hasGeminiWeekly, quota.GeminiWeekly)
 	}
 }
 
@@ -355,6 +458,37 @@ func formatQuotaBadge(fraction float64, err error) string {
 		return colorize("🟡 "+str, ColorYellow)
 	}
 	return colorize("🔴 "+str, ColorRed)
+}
+
+// formatQuotaErrorShort summarizes a quota fetch error into a short tag for UI display.
+func formatQuotaErrorShort(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(msg, "Verify your account"):
+		return "verify account"
+	case strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "timeout"):
+		return "timeout"
+	case strings.Contains(lower, "no refresh_token"):
+		return "no token"
+	case strings.Contains(lower, "invalid_grant"):
+		return "token expired"
+	case strings.Contains(lower, "token refresh failed"):
+		return "auth refresh failed"
+	case strings.Contains(lower, "api error (401)") || strings.Contains(lower, "api error (403)"):
+		return "auth error"
+	case strings.Contains(lower, "api error (429)"):
+		return "rate limited"
+	case strings.Contains(lower, "api error (5"):
+		return "server error"
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "connection") || strings.Contains(lower, "dial tcp") || strings.Contains(lower, "network"):
+		return "network error"
+	default:
+		return "unavailable"
+	}
 }
 
 func formatQuotaReset(resetStr string) string {
@@ -587,7 +721,7 @@ func selectSmartProfileDetailed(profiles []ProfileInfo, activeProfile string, ex
 		return "", "", ex
 	}
 
-	quotas := fetchAllProfilesQuota(profiles, 3500*time.Millisecond)
+	quotas := fetchAllProfilesQuota(profiles, 8*time.Second)
 	if len(quotas) == 0 {
 		return "", "", ex
 	}
